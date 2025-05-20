@@ -1,0 +1,1310 @@
+
+clear
+set more off
+log close _all
+
+** Set globals
+global stem "Z:\Bill\HCQ analysis"
+global data "$stem\Claims"
+global processed "$stem\Processed data"
+
+log using "$stem\Log files\clean_claims_and_enrollment_data.log", append
+
+****************************************************************************************************************
+
+/*
+
+************************************************************
+** Save county-month level enrollment
+************************************************************
+
+	clear
+	import delimited using "Z:\Bill\HCQ analysis\Processed data\total_adult_enrollees_per_county_month", delimiter("|") varnames(1)
+	drop if state_county_fips == 99999
+
+	di "**** Total counties with enrollment"
+	count
+
+	
+	** Reshape data from county to county-month level
+	foreach v of varlist jan_2019-mar_2021{
+	rename `v' total_enr_`v'
+	}
+	reshape long total_enr_, i(state_county_fips) j(month) string
+
+	di "**** Total county mounths with enrollment"
+	count
+	di "**** Total counties overall"
+	egen n_county = group(state_county_fips)
+	quietly su n_county
+	di `r(max)'
+	drop n_county
+	
+	di "- Drop county months with <50 enrollees"
+	drop if total_enr_<50
+	count
+	di "- Total counties overall"
+	egen n_county = group(state_county_fips)
+	quietly su n_county
+	di `r(max)'
+	drop n_county
+
+	
+	** Generate numeric month flag
+	g year = substr(month,5,9)
+	tab year
+	destring year, replace
+
+	g month_string = substr(month,1,3)
+	g month_num = .
+	local m_num = 1
+	foreach m in jan feb mar apr may jun jul aug sep oct nov dec{
+	replace month_num = `m_num' if month_string == "`m'"
+	local m_num = `m_num'+1
+	}
+	tab month_string month_num
+	drop month_string month
+	g month = mofd(mdy(month_num, 1, year))
+	format month %tm
+	tab month
+
+	
+	** Save enrollment file
+	rename total_enr_ total_enrollees
+	keep state_county_fips month total_enrollees
+	order state_county_fips month total_enrollees
+	
+	save "Z:\Bill\HCQ analysis\Processed data\total_adult_enrollees_per_county_month_50plus_enrollees", replace
+*/
+	
+
+************************************************************
+** Save commercial and MA pharmacy claims as one file
+************************************************************
+	
+foreach d in HCQ MTX AZM NIT IVM ALB DEX PRE{
+
+di "********************************************"
+di " ********************** `d' "
+di "********************************************"
+
+	clear
+	import delimited using "$data\\`d' claims\PHARMACY_INITIAL_EXTRACT", delimiter("|") varnames(1)
+	drop if state_county_fips == 99999
+
+	keep optum_lab_id svc_date oldw_prescribing_provider_id oldw_claim_nbr gender d_ruca_code state_county_fips state_code contact_age specialty*
+	g oldw_provider_id = oldw_prescribing_provider_id
+	drop oldw_prescribing_provider_id
+	g source = "COM"
+	tempfile com_claims
+	save `com_claims'
+
+	clear
+	import delimited using "$data\\`d' claims\PHARMACY_D_INITIAL_EXTRACT", delimiter("|") varnames(1)
+	keep optum_lab_id svc_date oldw_provider_id oldw_claim_nbr gender d_ruca_code state_county_fips state_code contact_age specialty*
+	g source = "MA"
+	tempfile ma_claims
+	save `ma_claims'
+
+	clear
+	use `com_claims'
+	append using `ma_claims'
+
+	g date = date(svc_date, "MDY")
+	format date %td
+	g month = mofd(date)
+	format month %tm
+	tab month
+	
+	drop if contact_age<18
+	
+	g specialty = specialty_category_code_desc
+	replace specialty = specialty_name if specialty == ""
+	replace specialty = strtrim(specialty)
+	replace specialty = "UNKNOWN" if specialty == ""
+	
+	g specialty_group = ""
+	replace specialty_group = "Allergy" if specialty == "ALLERGIST" | specialty == "ALLERGY AND IMMUNOLOGY"
+	replace specialty_group = "Dermatology" if specialty == "DERMATOLOGIST" | specialty == "DERMATOLOGY"
+	replace specialty_group = "EmergencyMedicine" if specialty == "EMERGENCY MEDICINE"
+	replace specialty_group = "FamilyMedicine" if specialty == "FAMILY PRACTICE" | specialty == "FAMILY PRACTICE/CLINIC" | specialty == "FAMILY PRACTICE SPECIALIST"
+	replace specialty_group = "InternalMedicine" if specialty == "INTERNAL MEDICINE" | specialty == "INTERNIST" | specialty == "INTERNAL MEDICINE SPECIALIST" | ///
+		specialty == "HOSPITALIST" | specialty == "AFTER HOURS CLINIC/URGENT CARE"
+	replace specialty_group = "NursePractitioner" if specialty == "RN, SPECIAL SERVICE" | specialty == "NURSE PRACTITIONER" | specialty == "FAMILY NURSE PRACTITIONER" | specialty == "ADVANCED REGISTERED NURSE PRACTITIONER"
+	replace specialty_group = "OBGYN" if specialty == "OB/GYN" | specialty == "OBSTETRICS AND GYNECOLOGY" | specialty == "MATERNAL AND FETAL MEDICINE"
+	replace specialty_group = "Pediatrics" if specialty == "PEDIATRICIAN" | specialty == "PEDIATRIC SPECIALIST" | specialty == "PEDIATRICS"
+	replace specialty_group = "Rheumatology" if specialty == "RHEUMATOLOGIST" | specialty == "RHEUMATOLOGY"
+	replace specialty_group = "Unknown" if specialty == "UNKNOWN SPECIALTY" | specialty == "UNKNOWN"
+	replace specialty_group = "Other" if specialty_group == ""
+	tab specialty_group, missing
+	
+	
+	** Flag new prescriptions using 6 month lookback period
+	bys optum_lab_id state_county_fips (date oldw_claim_nbr): g new_script = (_n==1 | date[_n-1]<date-(6*28))
+	by optum_lab_id state_county_fips date (oldw_claim_nbr): replace new_script = 1 if new_script[1] == 1
+	
+	
+	** Keep 2019-March 2021 scripts
+	tab month
+	drop if month<ym(2019,1)
+	tab month
+	
+	** Drop counties with <50 enrollees in a particular month
+	merge m:1 state_county_fips month using "$processed\total_adult_enrollees_per_county_month_50plus_enrollees", keepusing(state_county_fips month) keep(3) nogen
+	
+	
+	sort optum_lab_id svc_date oldw_claim_nbr
+	save "$processed\\`d'_claims", replace
+
+	
+	** Generate dataset of new prescriptions
+	clear
+	use  "$processed\\`d'_claims"
+	keep if new_script==1
+
+	duplicates report optum_lab_id date state_county_fips oldw_claim_nbr oldw_provider_id
+	duplicates report optum_lab_id state_county_fips date 
+	duplicates tag optum_lab_id state_county_fips date, g(dup)
+		sort optum_lab_id state_county_fips date oldw_claim_nbr oldw_provider_id
+		g randnum2=uniform() if dup>0
+		bys optum_lab_id  state_county_fips (date oldw_claim_nbr oldw_provider_id): egen max_rand2=max(randnum2) if  dup>0
+		g keep = randnum2==max_rand2 if dup>0
+		drop if keep == 0
+		drop keep
+	
+	drop if gender == "U" | d_ruca_code == "U"
+	save "$processed\\`d'_claims_new_prescriptions", replace	
+	}
+
+
+/*
+************************************************************
+** Generate patient-level Elixhauser chronic conditions flag
+************************************************************
+
+clear
+import delimited using "$data\Elixhauser Comorbidities\elixhauser_by_patient_2019to2020", delimiter("|") varnames(1)
+
+egen total_elixhauser = rowtotal(chf-depression)
+tab total_elixhauser
+
+save "$processed\elixhauser_by_patient_2019to2020"
+*/
+log close _all
+
+
+log close _all
+clear
+set more off
+
+** Set globals
+global stem "Z:\Bill\HCQ analysis"
+global data "$stem\Claims"
+global results "$stem\Results"
+global processed "$stem\Processed data"
+
+log using "Z:\Bill\HCQ analysis\Log files\covid_cases_per_county_month_`c(current_date)'.log", replace
+
+**************************************************************************************************************************************************
+
+// Pull claims from facilities and physicians
+
+	clear
+	import delimited using "$data\\COVID claims\FACILITY_INITIAL_EXTRACT", delimiter("|") varnames(1)
+	keep optum_lab_id gender contact_age svc_date oldw_claim_nbr state_county_fips
+	drop if state_county_fips == 99999
+	tempfile fac_claims
+	save `fac_claims'
+	
+	clear
+	import delimited using "$data\\COVID claims\PHYSICIAN_INITIAL_EXTRACT", delimiter("|") varnames(1)
+	keep optum_lab_id gender contact_age svc_date oldw_claim_nbr state_county_fips
+	drop if state_county_fips == 99999
+	tempfile phys_claims
+	save `phys_claims'
+
+	
+// Identify total diagnoses by county-month
+
+	clear
+	use `fac_claims'
+	append using `phys_claims'
+
+	g date = date(svc_date, "MDY")
+	format date %td
+	g month=mofd(date)
+	format month %tm
+	tab month
+	
+	g total_covid_cases = 1
+	collapse (sum) total_*, by(state_county_fips month)
+	tab month
+	keep if month>=ym(2020,4)
+	
+// Keep (1) counties with prescriptions that have at least 50 adult enrollees and 
+// (2) counties without prescriptions that have at least 50 enrollees 	
+	merge 1:1 state_county_fips month using "$processed\total_adult_enrollees_per_county_month_50plus_enrollees"
+	keep if _merge == 2 | _merge == 3
+	drop _merge
+	
+	
+// For counties without prescriptions, change missing values for counts to 0
+// and for all counties, calculate total new prescriptions per 100k enrollees
+	foreach v of varlist total**{
+		replace `v' = 0 if `v' == .
+		g `v'_per_100k_enr = (`v'/total_enrollees) * 100000
+		}
+
+save "$processed\covid_cases_per_county_month", replace
+
+log close _all
+
+
+clear
+set more off
+log close _all
+
+** Set globals
+global stem "Z:\Bill\HCQ analysis"
+global data "$stem\Claims"
+global results "$stem\Results"
+global processed "$stem\Processed data"
+
+log using "$stem\Log files\prescription_volume_per_county_month`c(current_date)'.log", replace
+
+****************************************************************************************************************
+
+
+** Store volume of all prescriptions by county/month
+	clear
+	import delimited using "$data\\Any drug\total_scripts_per_county_per_month", delimiter("|") varnames(1)	
+	rename month cal_month
+	rename year cal_year
+	rename total_claims total_claims_all
+		
+	g month=mofd(mdy(cal_month,1,cal_year))
+	format month %tm
+	count
+	merge 1:1 state_county_fips month using "$processed\total_adult_enrollees_per_county_month_50plus_enrollees", keepusing(state_county_fips month) keep(3) nogen
+
+	tempfile all_by_fips_month
+	save `all_by_fips_month'
+	
+
+*** Calculate volume of prescriptions by county/month	
+	foreach d in HCQ MTX AZM NIT IVM ALB DEX PRE{
+		clear
+		use  "$processed\\`d'_claims", replace
+		
+		g total_claims_`d' = 1
+		collapse (sum) total_claims_`d', by(state_county_fips month)
+		sort month
+				
+		tempfile `d'_by_fips_month
+		save ``d'_by_fips_month'
+		}
+
+
+** Combine all drugs and drugs of interest
+	clear
+	use `all_by_fips_month'
+	foreach d in all HCQ MTX AZM NIT IVM ALB DEX PRE{
+		merge 1:1 state_county_fips month using ``d'_by_fips_month', nogen
+	}
+	foreach v of varlist total*{
+		replace `v' = 0 if `v' == .
+	}
+	
+	g total_claims_all_non_tx = total_claims_all - total_claims_HCQ - total_claims_AZM - total_claims_IVM - total_claims_DEX
+	sort state_county_fips month
+	order state_county_fips month
+	
+export excel using "$results\prescription_volume_per_county_month.xlsx", replace firstrow(var)
+
+log close _all
+
+
+clear
+set more off
+log close _all
+set seed 1988
+
+** Set globals
+global stem "Z:\Bill\HCQ analysis"
+global data "$stem\Claims"
+global results "$stem\Results"
+global processed "$stem\Processed data"
+
+log using "Z:\Bill\HCQ analysis\Log files\new_patient_characteristics_`c(current_date)'.log", replace
+
+****************************************************************************************************************
+
+foreach d in HCQ AZM IVM DEX {
+foreach m in mar19_apr19 mar20_apr20 jun19_mar20 jun20_mar21{
+
+	di " ********************** `d' - `m'"
+
+	clear
+	use  "$processed\\`d'_claims_new_prescriptions"
+	
+	if("`m'" == "mar19_apr19"){
+		keep if month>=ym(2019,3) & month<=ym(2019,4)
+	}
+	else if("`m'" == "mar20_apr20"){
+		keep if month>=ym(2020,3) & month<=ym(2020,4)
+	}
+	else if("`m'" == "jun19_mar20"){
+		keep if month>=ym(2019,6) & month<=ym(2020,3)
+	}
+	else if("`m'" == "jun20_mar21"){
+		keep if month>=ym(2020,6) & month<=ym(2021,3)
+	}
+	
+	// Some patients may have multiple new claims on same day, so just keep one observation for those patients
+	duplicates report optum_lab_id state_county_fips
+	duplicates report optum_lab_id state_county_fips date
+	bys optum_lab_id state_county_fips (date): keep if _n==1
+	
+	// Calculate number of new patients in data
+	egen n_pat = group(optum_lab_id)
+	su n_pat
+	drop n_pat
+	
+	// Generate binary variables for patient characteristics
+		** Age
+		su contact_age, de
+		g agegroup = "18-24" if contact_age<25
+		replace agegroup = "25-34" if contact_age>=25 & contact_age<35
+		replace agegroup = "35-44" if contact_age>=35 & contact_age<45
+		replace agegroup = "45-54" if contact_age>=45 & contact_age<55
+		replace agegroup = "55-64" if contact_age>=55 & contact_age<65
+		replace agegroup = "65-74" if contact_age>=65 & contact_age<75
+		replace agegroup = "75plus" if contact_age>=75
+		tab agegroup, g(age_)
+			rename age_1 age_18_24
+			rename age_2 age_25_34
+			rename age_3 age_35_44
+			rename age_4 age_45_54
+			rename age_5 age_55_64
+			rename age_6 age_65_74
+			rename age_7 age_75plus
+		
+		** Gender
+		tab gender, missing g(gender_) 
+			rename gender_1 gender_female
+			rename gender_2 gender_male
+		
+		** RUCA code for rurality
+		tab d_ruca_code, missing g(ruca_)
+			rename ruca_1 ruca_a
+			rename ruca_2 ruca_b
+			rename ruca_3 ruca_c
+			rename ruca_4 ruca_d
+		
+		** Insurance type
+		tab source, missing g(ins_type_)
+			rename ins_type_1 ins_type_com
+			rename ins_type_2 ins_type_ma
+		
+		** Total Elixhauser conditions across 2019-2020
+		merge m:1 optum_lab_id using "$processed/elixhauser_by_patient_2019to2020", keep(1 3) keepusing(total*) nogen
+		replace total_elixhauser = 0 if total_elixhauser==.
+		tab total_elixhauser
+		g total_elix = string(total_elixhauser)
+		replace total_elix = "3plus" if total_elixhauser>=3
+		tab total_elix, missing g(total_elix_)
+			rename total_elix_1 total_elix_0
+			rename total_elix_2 total_elix_1
+			rename total_elix_3 total_elix_2
+			rename total_elix_4 total_elix_3plus
+		
+		** Specialty of doctor that prescribed new prescriptions
+		tab specialty_group, missing g(spec_)
+			rename spec_1 spec_allergy
+			rename spec_2 spec_dermatology
+			rename spec_3 spec_emerg_med
+			rename spec_4 spec_family_med
+			rename spec_5 spec_internal_med
+			rename spec_6 spec_nurse_prac
+			rename spec_7 spec_obgyn
+			rename spec_8 spec_other
+			rename spec_9 spec_pediatrics
+			rename spec_10 spec_rheumatology
+			rename spec_11 spec_unknown
+	
+	// Export new patient characteristics at the county-level for each drug in each time period 
+	collapse (sum) age_* gender_* ruca_* ins_type_* total_elix_* spec_* , by(state_county_fips)
+	export excel using "$results\new_patient_characteristics_per_county.xlsx", sheet("`d'_`m'") sheetreplace firstrow(var)
+	}
+	}
+
+	
+log close _all
+
+
+clear
+set more off
+log close _all
+set seed 1988
+
+** Set globals
+global stem "Z:\Bill\HCQ analysis"
+global data "$stem\Claims"
+global results "$stem\Results"
+global processed "$stem\Processed data"
+
+log using "Z:\Bill\HCQ analysis\Log files\rate_new_prescribing_per_county_month_`c(current_date)'.log", replace
+
+****************************************************************************************************************
+	
+foreach d in HCQ MTX AZM NIT IVM ALB DEX PRE{
+
+	di " ********************** `d' "
+
+	clear
+	use  "$processed\\`d'_claims_new_prescriptions"
+	
+	// Some patients may have multiple new claims on same day, so just keep one observation for those patients
+	duplicates report optum_lab_id state_county_fips
+	duplicates report optum_lab_id state_county_fips date
+	bys optum_lab_id state_county_fips (date): keep if _n==1
+	
+	// Calculate number of new patients in data
+	egen n_pat = group(optum_lab_id)
+	su n_pat
+	drop n_pat
+	
+	// Count number of new prescriptons per county
+	collapse (sum) new_scripts = new_script , by(state_county_fips month)
+		
+	// Keep (1) counties with prescriptions that have at least 50 adult enrollees and 
+	// (2) counties without prescriptions that have at least 50 enrollees 	
+	merge 1:1 state_county_fips month using "$processed\total_adult_enrollees_per_county_month_50plus_enrollees"
+	keep if _merge == 2 | _merge == 3
+	drop _merge
+
+	// For counties without prescriptions, change missing values for counts to 0
+	// and for all counties, calculate total new prescriptions per 100k enrollees
+	foreach v of varlist new*{
+		replace `v' = 0 if `v' == .
+		g `v'_per_100k_enr = (`v'/total_enrollees) * 100000
+		}
+		
+	// Merge on COVID cases and calculate new prescribing per 100,000 COVID cases
+	merge 1:1 state_county_fips month using "$processed\covid_cases_per_county_month", nogen keepusing(total_covid_cases total_covid_cases_per_100k_enr)
+	g new_scripts_per_100k_covid = (new_scripts/total_covid_cases) * 100000
+
+	export excel using "$results\rate_new_prescribing_per_county_month.xlsx", sheet("`d'") sheetreplace firstrow(var)
+
+	}
+
+log close _all
+
+
+
+clear
+set more off
+log close _all
+set seed 1988
+
+** Set globals
+global stem "Z:\Bill\HCQ analysis"
+global data "$stem\Claims"
+global results "$stem\Results"
+global processed "$stem\Processed data"
+
+log using "Z:\Bill\HCQ analysis\Log files\new_patient_prescription_demand_`c(current_date)'.log", replace
+
+****************************************************************************************************************
+
+foreach d in HCQ MTX AZM NIT IVM ALB DEX PRE{
+
+	di " ********************** `d' "
+	
+	clear
+	use  "$processed\\`d'_claims_new_prescriptions"
+	
+	// Keep new patients in time period of interest
+	keep if month>=ym(2020,6) & month<=ym(2021,3)
+	
+	// Some patients may have multiple new claims on same day, so just keep one observation for those patients
+	duplicates report optum_lab_id state_county_fips
+	duplicates report optum_lab_id state_county_fips date
+	bys optum_lab_id state_county_fips (date): keep if _n==1
+		
+	// Merge in claims from days on and after patient is a new patient	
+	keep optum_lab_id date state_county_fips
+	rename date date_new_script
+	merge 1:m optum_lab_id state_county_fips using  "$processed\\`d'_claims", keep(1 3) nogen
+	keep if date >= date_new_script
+	
+	// Calculate total number of claims per patient once they become a new patient
+	g total_claims = 1
+	collapse (sum) total_claims , by(optum_lab_id state_county_fips)
+	sort state_county_fips
+	di "*** Total patient-county observations for `d'"
+	count
+	export excel state_county_fips total_claims using "$results\new_patient_script_demand_per_county.xlsx", sheet("`d'_jun20_mar21") sheetreplace firstrow(var)
+
+
+}
+log close _all
+
+*********************************************************************************************************************************
+*** This .do file cleans up precinct-level vote share data and creates a county-level data set of vote shares
+
+	*** Data source: 
+		*** https://www.nytimes.com/interactive/2021/upshot/2020-election-map.html
+		*** https://github.com/TheUpshot/presidential-precinct-map-2020
+	*** Last downloaded: April 19, 2021
+	*** Voting data is updated through March 30, 2021, and includes data for 2,523 counties 
+	
+*********************************************************************************************************************************
+
+clear all
+log close _all
+set more off
+estimates clear
+
+** Set directories to access files
+	if c(username)=="marem"{
+	global path "C:/Users/marem/OneDrive - Harvard University/Projects/Michael"
+	}
+	else {
+	global path "/Users/Billgaye/OneDrive - Harvard University/Projects/Michael"
+	}
+	global dir "$path/Physician Prescribing and COVID/Data"
+
+	
+** Set globals	
+	global public "$dir/Public data"
+	global clean "$dir/Clean data"
+	global log "$dir/Log Files"
+	
+log using "$log/clean_vote_share_data_`c(current_date)'.log", replace
+
+
+*********************************************************************************************************************************
+
+
+** Store county-to-FIPS crosswalk (voting data only has FIPS county codes, but not county or state names)
+	clear
+	import delimited using "$public/FIPS_to_countyname_xwalk.csv", rowr(4:3236) varnames(4)
+
+	rename name county
+
+	statastates, abbreviation(state)		// Source of user-written command: https://ideas.repec.org/c/boc/bocode/s458205.html
+	tab state _merge
+	keep if _merge == 3
+	drop _merge
+
+	rename state state_abrv
+	rename state_name state
+	replace state = proper(state)
+	drop state_fips
+
+	order state state_abrv county fips
+	rename fips state_county_fips
+	
+	tempfile fips_to_county
+	save `fips_to_county'
+
+
+** Bring in voting data
+	clear
+	import delimited using "$public/voteshare_by_precinct_nytimes.csv", varnames(1)
+	codebook
+
+
+** Clean data
+	// Drop columns not needed
+	drop v1
+	
+	// Identify FIPS codes from GEOID variable (unique identifier for the precinct, formed from the five-digit county FIPS code followed by the precinct name/ID (eg, 30003-08 or 39091-WEST MANSFIELD))
+	g state_county_fips = substr(geoid, 1, 5)
+	destring state_county_fips, replace
+	
+	// Destring vote data
+	//tab1 pct_dem_lead votes_dem votes_rep votes_total
+	destring votes_* pct_dem_lead, ignore("NA") replace
+	
+	
+** Collapse data from precinct-level to county-level using fips
+	collapse (sum) votes_*, by(state_county_fips)
+	
+
+** Merge state information
+	merge 1:1 state_county_fips using `fips_to_county', keep(1 3)
+	list if _merge == 1
+	drop _merge
+		
+		replace state = "Colorado" if state_county_fips==8014		
+		replace state_abrv = "CO" if state_county_fips==8014		
+		replace county = "Broomfield" if state_county_fips==8014
+		
+		replace state = "South Dakota" if state_county_fips==46102		
+		replace state_abrv = "SD" if state_county_fips==46102		
+		replace county = "Oglala Lakota" if state_county_fips==46102
+	
+	codebook state
+	tab state								// Data includes 2,515 counties across 47 states
+
+	
+** Calc percent of republican votes
+	g repvotes_perc = (votes_rep/votes_total)*100
+	su repvotes_perc, de					// Rep votes between 5 and 96%
+
+	
+** Identify vote share percentiles
+	su repvotes_perc, de
+	return list
+	g vote_group = 1 if repvotes_perc!=. & repvotes_perc<r(p25)
+	replace vote_group = 2 if repvotes_perc!=. & repvotes_perc>=r(p25) & repvotes_perc<r(p50)
+	replace vote_group = 3 if repvotes_perc!=. & repvotes_perc>=r(p50) & repvotes_perc<r(p75)
+	replace vote_group = 4 if repvotes_perc!=. & repvotes_perc>=r(p75) 
+	
+	label define vote 1 "<25th percentile" 2 "25-49th percentile" 3 "50-74th percentile" 4 ">=75th percentile"
+	label values vote_group vote
+	tab vote_group
+
+	
+** Label data
+	label variable state_county_fips "FIPS state and county code"
+	label variable votes_dem "Votes received by Joe Biden"
+	label variable votes_rep "Votes received by Donald Trump"
+	label variable votes_total "Total votes in county"
+	label variable state "State"
+	label variable state_abrv "State abbreviation"
+	label variable county "County name"
+	label variable repvotes_perc "Percent of votes in county received by Donald Trump"
+	label variable vote_group "Trump vote share quartile"
+	
+	
+** Save data
+	save "$clean/voteshare_by_county_fips_nytimes", replace
+	
+	describe, replace clear
+	export excel name varlab using "$clean/data_dictionary_voteshare_by_county_fips_nytimes", replace firstrow(varl)
+
+	
+	
+log close _all
+
+*********************************************************************************************************************************
+*** This .do file cleans up precinct-level vote share data and creates a county-level data set of vote shares
+
+	*** Data source: 
+		*** https://www.nytimes.com/interactive/2021/upshot/2020-election-map.html
+		*** https://github.com/TheUpshot/presidential-precinct-map-2020
+	*** Last downloaded: April 19, 2021
+	*** Voting data is updated through March 30, 2021, and includes data for 2,523 counties 
+	
+*********************************************************************************************************************************
+
+clear all
+log close _all
+set more off
+estimates clear
+
+** Set directories to access files
+	if c(username)=="marem"{
+	global path "C:/Users/marem/OneDrive - Harvard University/Projects/Michael"
+	}
+	else {
+	global path "/Users/Billgaye/OneDrive - Harvard University/Projects/Michael"
+	}
+	global dir "$path/Physician Prescribing and COVID/Data"
+
+	
+** Set globals	
+	global public "$dir/Public data"
+	global clean "$dir/Clean data"
+	global log "$dir/Log Files"
+	
+log using "$log/clean_vote_share_data_`c(current_date)'.log", replace
+
+
+*********************************************************************************************************************************
+
+
+** Store county-to-FIPS crosswalk (voting data only has FIPS county codes, but not county or state names)
+	clear
+	import delimited using "$public/FIPS_to_countyname_xwalk.csv", rowr(4:3236) varnames(4)
+
+	rename name county
+
+	statastates, abbreviation(state)		// Source of user-written command: https://ideas.repec.org/c/boc/bocode/s458205.html
+	tab state _merge
+	keep if _merge == 3
+	drop _merge
+
+	rename state state_abrv
+	rename state_name state
+	replace state = proper(state)
+	drop state_fips
+
+	order state state_abrv county fips
+	rename fips state_county_fips
+	
+	tempfile fips_to_county
+	save `fips_to_county'
+
+
+** Bring in voting data
+	clear
+	import delimited using "$public/voteshare_by_precinct_nytimes.csv", varnames(1)
+	codebook
+
+
+** Clean data
+	// Drop columns not needed
+	drop v1
+	
+	// Identify FIPS codes from GEOID variable (unique identifier for the precinct, formed from the five-digit county FIPS code followed by the precinct name/ID (eg, 30003-08 or 39091-WEST MANSFIELD))
+	g state_county_fips = substr(geoid, 1, 5)
+	destring state_county_fips, replace
+	
+	// Destring vote data
+	//tab1 pct_dem_lead votes_dem votes_rep votes_total
+	destring votes_* pct_dem_lead, ignore("NA") replace
+	
+	
+** Collapse data from precinct-level to county-level using fips
+	collapse (sum) votes_*, by(state_county_fips)
+	
+
+** Merge state information
+	merge 1:1 state_county_fips using `fips_to_county', keep(1 3)
+	list if _merge == 1
+	drop _merge
+		
+		replace state = "Colorado" if state_county_fips==8014		
+		replace state_abrv = "CO" if state_county_fips==8014		
+		replace county = "Broomfield" if state_county_fips==8014
+		
+		replace state = "South Dakota" if state_county_fips==46102		
+		replace state_abrv = "SD" if state_county_fips==46102		
+		replace county = "Oglala Lakota" if state_county_fips==46102
+	
+	codebook state
+	tab state								// Data includes 2,515 counties across 47 states
+
+	
+** Calc percent of republican votes
+	g repvotes_perc = (votes_rep/votes_total)*100
+	su repvotes_perc, de					// Rep votes between 5 and 96%
+
+	
+** Identify vote share percentiles
+	su repvotes_perc, de
+	return list
+	g vote_group = 1 if repvotes_perc!=. & repvotes_perc<r(p25)
+	replace vote_group = 2 if repvotes_perc!=. & repvotes_perc>=r(p25) & repvotes_perc<r(p50)
+	replace vote_group = 3 if repvotes_perc!=. & repvotes_perc>=r(p50) & repvotes_perc<r(p75)
+	replace vote_group = 4 if repvotes_perc!=. & repvotes_perc>=r(p75) 
+	
+	label define vote 1 "<25th percentile" 2 "25-49th percentile" 3 "50-74th percentile" 4 ">=75th percentile"
+	label values vote_group vote
+	tab vote_group
+
+	
+** Label data
+	label variable state_county_fips "FIPS state and county code"
+	label variable votes_dem "Votes received by Joe Biden"
+	label variable votes_rep "Votes received by Donald Trump"
+	label variable votes_total "Total votes in county"
+	label variable state "State"
+	label variable state_abrv "State abbreviation"
+	label variable county "County name"
+	label variable repvotes_perc "Percent of votes in county received by Donald Trump"
+	label variable vote_group "Trump vote share quartile"
+	
+	
+** Save data
+	save "$clean/voteshare_by_county_fips_nytimes", replace
+	
+	describe, replace clear
+	export excel name varlab using "$clean/data_dictionary_voteshare_by_county_fips_nytimes", replace firstrow(varl)
+
+	
+	
+log close _all
+
+
+clear all
+log close _all
+set more off
+estimates clear
+
+** Set directories to access files
+	if c(username)=="marem"{
+	global path "C:/Users/marem/OneDrive - Harvard University/Projects/Michael"
+	}
+	else {
+	global path "/Users/Billgaye/OneDrive - Harvard University/Projects/Michael"
+	}
+	global dir "$path/Physician Prescribing and COVID/Data"
+	
+** Set globals	
+	global optum "$dir/Optum data"
+	global clean "$dir/Clean data"
+	global log "$dir/Log Files"
+	
+log using "$log/clean_county_level_optum_patient_characteristics_`c(current_date)'.log", replace
+
+
+*********************************************************************************************************************************
+
+
+clear
+import delimited using "$optum/county_level_patient_characteristics_2019to2020.CSV", delimiter("|") varnames(1)
+describe
+codebook
+
+label define quartile 1 "<25th percentile" 2 "25-49th percentile" 3 "50-74th percentile" 4 ">=75th percentile"
+
+foreach v of varlist percent* mean*{
+	su `v', de
+	g `v'_group = 1 if `v'!=. & `v'<r(p25)
+	replace `v'_group = 2 if `v'!=. & `v'>=r(p25) & `v'<r(p50)
+	replace `v'_group = 3 if `v'!=. & `v'>=r(p50) & `v'<r(p75)
+	replace `v'_group = 4 if `v'!=. & `v'>=r(p75) 
+	tab `v'_group
+	
+	label values `v'_group quartile
+	tab `v'_group
+}	
+save "$clean/county_level_patient_characteristics_2019to2020.dta", replace
+
+
+log close _all
+
+
+log close _all
+set more off
+estimates clear
+
+** Set directories to access files
+	if c(username)=="marem"{
+	global path "C:/Users/marem/OneDrive - Harvard University/Projects/Michael"
+	}
+	else {
+	global path "/Users/Billgaye/OneDrive - Harvard University/Projects/Michael"
+	}
+	global dir "$path/Physician Prescribing and COVID/Data"
+
+	
+** Set globals	
+	global optum "$dir/Optum data"
+	global public "$dir/Public data"
+	global clean "$dir/Clean data"
+	global results "$dir/Results"
+
+****************************************************************************************************
+
+
+clear
+import excel using "$optum/prescription_volume_per_county_month", firstrow
+
+
+*** Merge Trump voting data to keep only counties for which we have this data for
+
+	merge m:1 state_county_fips using "$clean/voteshare_by_county_fips_nytimes", keepusing(repvotes_perc vote_group) keep(3) nogen
+
+	
+*** Graphs for prescription volume by drug type - comparing proposed treatment drugs to negative control drugs
+
+	preserve
+	collapse (sum) total*, by(month)
+
+	// Export Excel 
+		export excel using "$results/total_scripts_per_month_by drug.xlsx", replace firstrow(var)
+		
+	// Export graphs
+		twoway (line total_claims_HCQ month) (line total_claims_MTX month), ///
+			graphregion(color(white)) ////
+			xlabel(#27, format(%tdMonYY) labsize(vsmall) angle(45) grid) xtitle("") ///
+			ylabel(,angle(0)) ytitle("Total prescriptions") ///
+			legend(order(1 "HCQ" 2 "MTX"))
+		graph export "$results/total_scripts_per_month_HCQ vs MTX.pdf", replace
+
+		twoway (line total_claims_AZM month) (line total_claims_NIT month), ///
+			graphregion(color(white)) ////
+			xlabel(#27, format(%tdMonYY) labsize(vsmall) angle(45) grid) xtitle("") ///
+			ylabel(,angle(0)) ytitle("Total prescriptions") ///
+			legend(order(1 "AZM" 2 "NIT"))
+		graph export "$results/total_scripts_per_month_AZM vs NIT.pdf", replace
+
+		twoway (line total_claims_IVM month) (line total_claims_ALB month), ///
+			graphregion(color(white)) ////
+			xlabel(#27, format(%tdMonYY) labsize(vsmall) angle(45) grid) xtitle("") ///
+			ylabel(,angle(0)) ytitle("Total prescriptions") ///
+			legend(order(1 "IVM" 2 "ALB"))
+		graph export "$results/total_scripts_per_month_IVM vs ALB.pdf", replace
+
+		twoway (line total_claims_DEX month) (line total_claims_PRE month), ///
+			graphregion(color(white)) ////
+			xlabel(#27, format(%tdMonYY) labsize(vsmall) angle(45) grid) xtitle("") ///
+			ylabel(,angle(0)) ytitle("Total prescriptions") ///
+			legend(order(1 "DEX" 2 "PRE"))
+		graph export "$results/total_scripts_per_month_DEX vs PRE.pdf", replace
+		
+
+		
+*** Grahps for prescription volume across all drugs minus the proposed treatment drugs
+
+	restore
+	collapse (sum) total_claims_all_non_tx, by(month vote_group)
+	reshape wide total_claims_all_non_tx, i(month) j(vote_group)
+	egen total_claims_all_non_tx = rowtotal(total_claims_all_non_tx*)
+	
+	// Export Excel 
+		export excel using "$results/total_scripts_per_month_all drugs minus tx.xlsx", replace firstrow(var)
+		
+	// Export graphs
+		foreach v of varlist total*{
+			replace `v' = `v'/1000000
+		}
+		twoway line total_claims_all_non_tx month, ///
+			graphregion(color(white)) ////
+			xlabel(#27, format(%tdMonYY) labsize(vsmall) angle(45) grid) xtitle("") ///
+			ylabel(10(2)20,angle(0)) ytitle("Total prescriptions," "in millions") 
+		graph export "$results/total_scripts_per_month_all drugs minus tx.pdf", replace
+		
+		twoway line total_claims_all_non_tx1 total_claims_all_non_tx2 total_claims_all_non_tx3 total_claims_all_non_tx4 month, ///
+			graphregion(color(white)) ////
+			xlabel(#27, format(%tdMonYY) labsize(vsmall) angle(45) grid) xtitle("") ///
+			ylabel(0(2)12,angle(0)) ytitle("Total prescriptions," "in millions")  ///
+			legend(order(1 "1st (low GOP)" 2 "2nd" 3 "3rd" 4 "4th (high GOP)") size(vsmall) row(1))
+		graph export "$results/total_scripts_per_month_all drugs minus tx_by Trump bin.pdf", replace
+		
+		
+log close _all
+set more off
+estimates clear
+
+** Set directories to access files
+	if c(username)=="marem"{
+	global path "C:/Users/marem/OneDrive - Harvard University/Projects/Michael"
+	}
+	else {
+	global path "/Users/Billgaye/OneDrive - Harvard University/Projects/Michael"
+	}
+	global dir "$path/Physician Prescribing and COVID/Data"
+
+	
+** Set globals	
+	global optum "$dir/Optum data"
+	global public "$dir/Public data"
+	global clean "$dir/Clean data"
+	global results "$dir/Results"
+
+****************************************************************************************************
+
+
+*** New patient characteristics across ALL counties
+
+	foreach d in HCQ AZM IVM DEX {
+	foreach m in mar19_apr19 mar20_apr20 jun19_mar20 jun20_mar21 jun20_mar21{
+
+	clear
+	import excel using "$optum/new_patient_characteristics_per_county", sheet("`d'_`m'") firstrow
+
+	
+	// Merge Trump vote share bins
+		merge 1:1 state_county_fips using "$clean/voteshare_by_county_fips_nytimes", keepusing(repvotes_perc vote_group) keep(3) nogen
+
+	
+	// Store characteristics for ALL patients for each time period
+		
+		** Collapse data from county-level and store total number of patients
+			collapse (sum) age_* gender_* ruca_* ins_type_* total_elix_* spec_*
+			g _total_patients = gender_female + gender_male
+			order _total_patients, first
+		
+		** Reshape data from single row to a single column with counts for each characteristic
+			g group = "`m'"
+			foreach v of varlist _total_patients age_* gender_* ruca_* ins_type_* total_elix_* spec_*{
+				rename `v' count_`v'
+				}
+			reshape long count_, i(group) j(characteristic) string
+			reshape wide count_, i(characteristic) j(group) string
+			
+		** Calculate the percent of patients with a particular characteristic
+			g perc_`m' = count_`m'/count_`m'[1]
+		
+		
+		tempfile `d'_`m'
+		save ``d'_`m''
+
+	}
+	
+	// Combine characteristics for each time period into one sheet for each drug
+	clear
+	use ``d'_mar19_apr19'
+	merge 1:1 characteristic using ``d'_mar20_apr20', nogen
+	merge 1:1 characteristic using ``d'_jun19_mar20', nogen
+	merge 1:1 characteristic using ``d'_jun20_mar21', nogen
+
+	export excel using "$results/new_patient_characteristics_all.xlsx", firstrow(var) sheet("`d'") sheetreplace
+
+	}
+
+
+*** New patient characteristics by Trump vote county
+
+	foreach d in HCQ AZM IVM DEX {
+	foreach m in mar19_apr19 mar20_apr20 jun19_mar20 jun20_mar21 jun20_mar21{
+
+	clear
+	import excel using "$optum/new_patient_characteristics_per_county", sheet("`d'_`m'") firstrow
+
+	
+	// Merge Trump vote share bins
+		merge 1:1 state_county_fips using "$clean/voteshare_by_county_fips_nytimes", keepusing(repvotes_perc vote_group) keep(3) nogen
+
+		
+	// Store characteristics for all patients for each time period, by Trump voting bin
+		
+		** Collapse data from county-level to one row for each Trump voting bin, and store total number of patients
+			collapse (sum) age_* gender_* ruca_* ins_type_* total_elix_* spec_*, by(vote_group)
+			g _total_patients = gender_female + gender_male
+			order _total_patients, first
+			
+		** Reshape data from row for each voting bin to a column for each voting bin	
+			foreach v of varlist _total_patients age_* gender_* ruca_* ins_type_* total_elix_* spec_*{
+				rename `v' count_`v'
+				}
+			reshape long count_, i(vote_group) j(characteristic) string
+			reshape wide count_, i(characteristic) j(vote_group)
+			
+		** Calculate the percent of patients with a particular characteristic in each voting bin
+			forval v=1/4{
+			g perc_`v' = count_`v'/count_`v'[1]
+			}
+		
+	order characteristic *_1 *_2 *_3 *_4	
+	export excel using "$results/new_patient_characteristics_by_county_Trump_vote.xlsx", firstrow(var) sheet("`d'_`m'") sheetreplace
+	}
+	}
+
+
+log close _all
+set more off
+estimates clear
+
+** Set directories to access files
+	if c(username)=="marem"{
+	global path "C:/Users/marem/OneDrive - Harvard University/Projects/Michael"
+	}
+	else {
+	global path "/Users/Billgaye/OneDrive - Harvard University/Projects/Michael"
+	}
+	global dir "$path/Physician Prescribing and COVID/Data"
+
+	
+** Set globals	
+	global optum "$dir/Optum data"
+	global public "$dir/Public data"
+	global clean "$dir/Clean data"
+	global results "$dir/Results"
+
+****************************************************************************************************
+
+
+*** New patient characteristics across ALL counties
+
+	foreach d in HCQ AZM IVM DEX {
+	foreach m in mar19_apr19 mar20_apr20 jun19_mar20 jun20_mar21 jun20_mar21{
+
+	clear
+	import excel using "$optum/new_patient_characteristics_per_county", sheet("`d'_`m'") firstrow
+
+	
+	// Merge Trump vote share bins
+		merge 1:1 state_county_fips using "$clean/voteshare_by_county_fips_nytimes", keepusing(repvotes_perc vote_group) keep(3) nogen
+
+	
+	// Store characteristics for ALL patients for each time period
+		
+		** Collapse data from county-level and store total number of patients
+			collapse (sum) age_* gender_* ruca_* ins_type_* total_elix_* spec_*
+			g _total_patients = gender_female + gender_male
+			order _total_patients, first
+		
+		** Reshape data from single row to a single column with counts for each characteristic
+			g group = "`m'"
+			foreach v of varlist _total_patients age_* gender_* ruca_* ins_type_* total_elix_* spec_*{
+				rename `v' count_`v'
+				}
+			reshape long count_, i(group) j(characteristic) string
+			reshape wide count_, i(characteristic) j(group) string
+			
+		** Calculate the percent of patients with a particular characteristic
+			g perc_`m' = count_`m'/count_`m'[1]
+		
+		
+		tempfile `d'_`m'
+		save ``d'_`m''
+
+	}
+	
+	// Combine characteristics for each time period into one sheet for each drug
+	clear
+	use ``d'_mar19_apr19'
+	merge 1:1 characteristic using ``d'_mar20_apr20', nogen
+	merge 1:1 characteristic using ``d'_jun19_mar20', nogen
+	merge 1:1 characteristic using ``d'_jun20_mar21', nogen
+
+	export excel using "$results/new_patient_characteristics_all.xlsx", firstrow(var) sheet("`d'") sheetreplace
+
+	}
+
+
+*** New patient characteristics by Trump vote county
+
+	foreach d in HCQ AZM IVM DEX {
+	foreach m in mar19_apr19 mar20_apr20 jun19_mar20 jun20_mar21 jun20_mar21{
+
+	clear
+	import excel using "$optum/new_patient_characteristics_per_county", sheet("`d'_`m'") firstrow
+
+	
+	// Merge Trump vote share bins
+		merge 1:1 state_county_fips using "$clean/voteshare_by_county_fips_nytimes", keepusing(repvotes_perc vote_group) keep(3) nogen
+
+		
+	// Store characteristics for all patients for each time period, by Trump voting bin
+		
+		** Collapse data from county-level to one row for each Trump voting bin, and store total number of patients
+			collapse (sum) age_* gender_* ruca_* ins_type_* total_elix_* spec_*, by(vote_group)
+			g _total_patients = gender_female + gender_male
+			order _total_patients, first
+			
+		** Reshape data from row for each voting bin to a column for each voting bin	
+			foreach v of varlist _total_patients age_* gender_* ruca_* ins_type_* total_elix_* spec_*{
+				rename `v' count_`v'
+				}
+			reshape long count_, i(vote_group) j(characteristic) string
+			reshape wide count_, i(characteristic) j(vote_group)
+			
+		** Calculate the percent of patients with a particular characteristic in each voting bin
+			forval v=1/4{
+			g perc_`v' = count_`v'/count_`v'[1]
+			}
+		
+	order characteristic *_1 *_2 *_3 *_4	
+	export excel using "$results/new_patient_characteristics_by_county_Trump_vote.xlsx", firstrow(var) sheet("`d'_`m'") sheetreplace
+	}
+	}
+
+*********************************************************************************************************************************
+** Notes:
+	* - How to assign percentiles: 
+		* (1): https://www.statalist.org/forums/forum/general-stata-discussion/general/11874-quartiles-or-centiles-by-group
+		* (2): https://back.nber.org/stata/efficient/percentiles.html
+*********************************************************************************************************************************
+
+log close _all
+set more off
+estimates clear
+
+** Set directories to access files
+	if c(username)=="marem"{
+	global path "C:/Users/marem/OneDrive - Harvard University/Projects/Michael"
+	}
+	else {
+	global path "/Users/Billgaye/OneDrive - Harvard University/Projects/Michael"
+	}
+	global dir "$path/Physician Prescribing and COVID/Data"
+
+	
+** Set globals	
+	global optum "$dir/Optum data"
+	global public "$dir/Public data"
+	global clean "$dir/Clean data"
+	global results "$dir/Results"
+	
+*********************************************************************************************************************************
+
+
+	foreach d in HCQ MTX AZM NIT IVM ALB DEX PRE {
+
+		di "********************* Drug = `d'"
+
+		putexcel set "$results/new_patient_script_demand_by_decile_jun2020tomar2021.xlsx", sheet("`d'", replace) modify
+		putexcel A1 = ("Decile across all counties") A15 = ("Decile within counties in same Trump voting bin"), bold
+
+		*** By decile across all counties
+
+			// Bring in data
+			clear
+			import excel "$optum/new_patient_script_demand_per_county.xlsx", sheet("`d'_jun20_mar21") firstrow
+			
+			// Merge Trump vote share bins
+			merge m:1 state_county_fips using "$clean/voteshare_by_county_fips_nytimes", keepusing(vote_group) keep(3) nogen
+			
+			// Assign observations to quintiles
+			g rand = runiform()
+			sort total_claims rand
+			drop rand
+			gen ptile = int(100*(_n-1)/_N)+1
+			tab ptile vote_group
+			egen decile = cut(ptile), at(1(10)101)
+			tab ptile decile
+			g decile_group = string(decile) + "-" + string(decile+10-1)
+			tab ptile decile_group
+			
+			// Collapse data from provider/patient level, to vote_group/quintile level
+			g total_patients= 1
+			collapse (sum) total_patients total_claims, by(vote_group decile_group)
+			reshape wide total_patients total_claims, i(decile_group) j(vote_group)
+			forval i=1/4{
+				egen all_claims_`i'  = total(total_claims`i')
+				g perc_claims`i' = total_claims`i'/all_claims_`i' 
+				drop all_claims_`i'	
+			}
+			
+			// Export tables
+			order decile_group *1 *2 *3 *4
+			export excel using "$results/new_patient_script_demand_by_decile_jun2020tomar2021.xlsx", sheet("`d'") sheetmodify cell(A2) firstrow(varl)
+		
+		
+
+		*** By decile within county's Trump voting bin
+
+			// Bring in data
+			clear
+			import excel "$optum/new_patient_script_demand_per_county.xlsx", sheet("`d'_jun20_mar21") firstrow
+			
+			// Merge Trump vote share bins
+			merge m:1 state_county_fips using "$clean/voteshare_by_county_fips_nytimes", keepusing(vote_group) keep(3) nogen
+			
+			// Assign observations to quintiles
+			tab total_claims vote_group
+			bys vote_group (total_claims): gen ptile = int(100*(_n-1)/_N)+1
+			tab ptile vote_group
+			egen decile = cut(ptile), at(1(10)101)
+			tab ptile decile
+			g decile_group = string(decile) + "-" + string(decile+10-1)
+			tab ptile decile_group
+			
+			// Collapse data from provider/patient level, to vote_group/quintile level
+			g total_patients= 1
+			collapse (sum) total_patients total_claims, by(vote_group decile_group)
+			reshape wide total_patients total_claims, i(decile_group) j(vote_group)
+			forval i=1/4{
+				egen all_claims_`i'  = total(total_claims`i')
+				g perc_claims`i' = total_claims`i'/all_claims_`i' 
+				drop all_claims_`i'	
+			}
+			
+			// Export tables
+			order decile_group *1 *2 *3 *4
+			export excel using "$results/new_patient_script_demand_by_decile_jun2020tomar2021.xlsx", sheet("`d'") sheetmodify cell(A16) firstrow(varl)
+			
+		}
+
+
+
+
