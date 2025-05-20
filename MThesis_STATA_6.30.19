@@ -1,0 +1,616 @@
+*open 2014 data
+use "C:\Users\billwang\Downloads\GH_2014_DHS_03102019_1456_129494\GHHR72DT\Ghana2014.dta"
+
+gen year = 2014
+
+*year of interview: hv007
+*month of interview: hv006
+*all interviews were done later than September of 2014
+
+*append 2008 data
+append using "C:\Users\billwang\Downloads\GH_2008_DHS_03102019_1457_129494\GHHR5ADT\Ghana2008.dta", force
+
+replace year = 2008 if year == .
+
+use "C:\Users\BillW\Documents\Thesis\Data Analysis\Ghana\GhanaCombined.dta", clear
+
+*set maximum variables
+set maxvar 10000, perm
+
+*append 2003 data
+
+append using "C:\Users\BillW\Documents\Thesis\Data Analysis\Ghana 2003.DTA"
+
+replace year = 2003 if year == .
+
+*need to change variables names to remove 0
+*anemia
+replace ha57_1 = ha57_01 if ha57_1 == .
+replace ha57_2 = ha57_02 if ha57_2 == .
+replace ha57_3 = ha57_03 if ha57_3 == .
+replace ha57_4 = ha57_04 if ha57_4 == .
+replace ha57_5 = ha57_05 if ha57_5 == .
+*height/age percentile
+replace ha4_1 = ha4_01 if ha4_1 == .
+replace ha4_2 = ha4_02 if ha4_2 == .
+replace ha4_3 = ha4_03 if ha4_3 == .
+replace ha4_4 = ha4_04 if ha4_4 == .
+replace ha4_5 = ha4_05 if ha4_5 == .
+*height/age SD
+replace ha5_1 = ha5_01 if ha5_1 == .
+replace ha5_2 = ha5_02 if ha5_2 == .
+replace ha5_3 = ha5_03 if ha5_3 == .
+replace ha5_4 = ha5_04 if ha5_4 == .
+replace ha5_5 = ha5_05 if ha5_5 == .
+*height/age ref. median
+replace ha6_1 = ha6_01 if ha6_1 == .
+replace ha6_2 = ha6_02 if ha6_2 == .
+replace ha6_3 = ha6_03 if ha6_3 == .
+replace ha6_4 = ha6_04 if ha6_4 == .
+replace ha6_5 = ha6_05 if ha6_5 == .
+*hemoglobin level
+replace hc56_1 = hc56_01 if hc56_1 == . 
+replace hc56_2 = hc56_02 if hc56_2 == .
+replace hc56_3 = hc56_03 if hc56_3 == .
+replace hc56_4 = hc56_04 if hc56_4 == .
+replace hc56_5 = hc56_05 if hc56_5 == .
+*body mass
+replace ha40_1 = ha40_01 if ha40_1 == .
+replace ha40_2 = ha40_02 if ha40_2 == .
+replace ha40_3 = ha40_03 if ha40_3 == .
+replace ha40_4 = ha40_04 if ha40_4 == .
+replace ha40_5 = ha40_05 if ha40_5 == .
+
+
+*generate time variable
+gen time = .
+replace time = 1 if year == 2014
+replace time = 0 if year == 2008
+
+*generate time variable for placebo test
+
+gen timep = .
+replace timep = 1 if year == 2008
+replace timep = 0 if year == 2003
+
+
+
+*generate treatment variable
+drop treatment
+gen treatment = 0
+replace treatment = 1 if hv024 == 7 & hv025 == 1
+replace treatment = 1 if hv024 == 8 & hv025 == 1
+replace treatment = 1 if hv024 == 4 & hv025 == 1
+replace treatment = 1 if hv024 == 1 & hv025 == 2
+
+replace treatment = 1 if hv023 == 2
+replace treatment = 1 if hv023 == 13
+replace treatment = 1 if hv023 == 15
+replace treatment = 1 if hv023 == 7
+
+
+*generate DID variable
+gen did = time*treatment
+
+*generate placebo DID
+gen didp = timep*treatment
+
+
+*clustering by:
+*sex: hv104_01
+*age: hv_105_01
+*size of household: hv009 - hv014
+*number of children hv035
+*sex of head of household: hv219
+*age of head of household: hv220
+*wealth index: hv270
+*usual resident: hv102_01
+*education: hv106-110
+*marital status: hv115
+
+***** DATA SECTION
+*compare qualitative characteristics of treatment and control group
+
+*number of household members
+bys year: summarize hv009 if treatment == 1
+bys year: summarize hv009 if treatment == 0
+
+*number of children 5 and under
+bys year: summarize hv014 if treatment == 1
+bys year: summarize hv014 if treatment == 0
+
+*sex of head of household
+gen head_sex = 0
+replace head_sex = 1 if hv219 == 2
+
+bys year: summarize head_sex if treatment == 1
+bys year: summarize head_sex if treatment == 0
+
+*age of head of household
+bys year: summarize hv220 if treatment == 1
+bys year: summarize hv220 if treatment == 0
+
+*wealth index
+bys year: summarize hv270 if treatment == 1
+bys year: summarize hv270 if treatment == 0
+
+*highest education of head
+bys year: summarize sh17a_01 if treatment == 1
+bys year: summarize sh17a_01 if treatment == 0
+
+bys year: summarize sh17b_01 if treatment == 1
+bys year: summarize sh17b_01 if treatment == 0
+
+
+***** ESTIMATION SECTION
+
+*placebo test
+
+*household accessories
+reg hv206 timep treatment didp hv270 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults3.tex, replace dec(5)
+
+reg hv208 timep treatment didp hv270 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults3.tex, append dec(5)
+
+reg hv210 timep treatment didp hv270 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults3.tex, append dec(5)
+
+reg hv211 timep treatment didp hv270 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults3.tex, append dec(5)
+*worse off or insignficant
+
+
+*height/age percentile
+reg ha4_1 timep treatment didp hv270 hv009 hv104_01 if hv105_01 < 25, cluster(hv024)
+outreg2 using GhanaResults4.tex, replace dec(5)
+
+reg ha4_2 timep treatment didp hv270 hv009 hv104_02 if hv105_02 < 25, cluster(hv024)
+outreg2 using GhanaResults4.tex, append dec(5)
+*insignficant
+
+*hemoglobin level
+reg hc56_1 timep treatment didp hv270 hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults4.tex, append dec(5)
+
+reg hc56_2 timep treatment didp hv270 hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults4.tex, append dec(5)
+*treatment better off for member 1
+
+*body mass
+reg ha40_1 timep treatment didp hv270 hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults4.tex, append dec(5)
+
+reg ha40_2 timep treatment didp hv270 hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults4.tex, append dec(5)
+*member 1 significant at 5% level
+
+
+*DID regressions
+
+*household accessories
+reg hv206 time treatment did hv270 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults5.tex, replace dec(5)
+
+reg hv208 time treatment did hv270 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults5.tex, append dec(5)
+
+reg hv210 time treatment did hv270 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults5.tex, append dec(5)
+
+reg hv211 time treatment did hv270 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults5.tex, append dec(5)
+*hv212, hv209 insignificant, hv207 worse off
+
+
+*height/age percentile
+reg ha4_1 time treatment did hv270 hv009 hv104_01 if hv105_01 < 25, cluster(hv024)
+outreg2 using GhanaResults6.tex, replace dec(5)
+
+reg ha4_2 time treatment did hv270 hv009 hv104_02 if hv105_02 < 25, cluster(hv024)
+outreg2 using GhanaResults6.tex, append dec(5)
+*significant for household members 1&2,
+
+
+*hc56: hemoglobin level
+reg hc56_1 time treatment did hv270 hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults6.tex, append dec(5)
+
+reg hc56_2 time treatment did hv270 hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults6.tex, append dec(5)
+*significant for member 1
+
+*ha40: body mass
+reg ha40_1 time treatment did hv270 hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults6.tex, append dec(5)
+
+reg ha40_2 time treatment did hv270 hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults6.tex, append dec(5)
+*member 2 better off
+
+
+*parallel trend using 1993 vs 2008
+use "C:\Users\billwang\Downloads\Data Analysis\Ghana\GH_1993_DHS_04252019_1234_129494\GHHR31DT\GHHR31FL.DTA", clear
+
+gen year = 1993
+
+save "C:\Users\billwang\Downloads\Data Analysis\Ghana\GH_1993_DHS_04252019_1234_129494\GHHR31DT\Ghana1993.dta"
+
+use "C:\Users\billwang\Downloads\Data Analysis\Ghana\GhanaCombined.dta"
+
+append "C:\Users\billwang\Downloads\Data Analysis\Ghana\GH_1993_DHS_04252019_1234_129494\GHHR31DT\Ghana1993.dta"
+
+*create treatment for 1993
+replace treatment = 1 if hv024 == 13
+replace treatment = 1 if hv024 == 15
+replace treatment = 1 if hv024 == 7
+replace treatment = 1 if hv024 == 1
+replace treatment = 0 if treatment == .
+
+*generate new DID variables
+gen timep2 = .
+replace timep2 = 0 if year == 1993
+replace timep2 = 1 if year == 1998
+
+gen didp2 = .
+replace didp2 = treatment*timep2
+
+*household accessories
+reg hv206 timep2 treatment didp2
+reg hv208 timep2 treatment didp2
+reg hv210 timep2 treatment didp2
+reg hv211 timep2 treatment didp2
+*does not show increasing trend
+
+*parallel trend using 1998 vs 2008
+use "C:\Users\billwang\Downloads\Data Analysis\Ghana\GH_1998_DHS_04252019_1234_129494\GHHR41DT\GHHR41FL.DTA"
+
+gen year = 1998
+
+save "C:\Users\billwang\Downloads\Data Analysis\Ghana\GH_1998_DHS_04252019_1234_129494\GHHR41DT\Ghana1998.dta"
+
+use "C:\Users\billwang\Downloads\Data Analysis\Ghana\GhanaCombined.dta"
+
+append using "C:\Users\billwang\Downloads\Data Analysis\Ghana\GH_1998_DHS_04252019_1234_129494\GHHR41DT\Ghana1998.dta"
+
+*create treatment for 1998
+replace treatment = 1 if hv024 == 13
+replace treatment = 1 if hv024 == 15
+replace treatment = 1 if hv024 == 7
+replace treatment = 1 if hv024 == 1
+replace treatment = 0 if treatment == .
+
+*generate new DID variables
+gen timep3 = .
+replace timep3 = 0 if year == 1998
+replace timep3 = 1 if year == 2003
+
+gen didp3 = .
+replace didp3 = treatment*timep3
+
+*household accessories
+reg hv206 timep3 treatment didp3
+reg hv208 timep3 treatment didp3
+reg hv210 timep3 treatment didp3
+reg hv211 timep3 treatment didp3
+*does not show increasing trend
+
+
+*did with all 5 years of data
+gen did_1993 = 0
+gen did_1998 = 0
+gen did_2003 = 0
+gen did_2014 = 0
+
+gen year_1993 = 0
+gen year_1998 = 0
+gen year_2003 = 0
+gen year_2014 = 0
+
+replace year_1993 = 1993 if year == 1993
+replace year_1998 = 1998 if year == 1998
+replace year_2003 = 2003 if year == 2003
+replace year_2014 = 2014 if year == 2014
+
+replace did_1993 = treatment*year if year == 1993
+replace did_1998 = treatment*year if year == 1998
+replace did_2003 = treatment*year if year == 2003
+replace did_2014 = treatment*year if year == 2014
+
+*economic variables
+reg hv206 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults1.tex, replace dec(5)
+
+reg hv208 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults1.tex, append dec(5)
+
+reg hv210 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults1.tex, append dec(5)
+
+reg hv211 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults1.tex, append dec(5)
+
+*health variables
+reg ha4_1 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv104_01 if hv105_01 < 25, cluster(hv024)
+outreg2 using GhanaResults2.tex, replace dec(5)
+
+reg ha4_2 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv104_01 if hv105_01 < 25, cluster(hv024)
+outreg2 using GhanaResults2.tex, append dec(5)
+
+reg hc56_1 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults2.tex, append dec(5)
+
+reg hc56_2 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults2.tex, append dec(5)
+
+reg ha40_1 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults2.tex, append dec(5)
+
+reg ha40_2 treatment year_1993 year_1998 year_2003 year_2014 did_1993 did_1998 did_2003 did_2014 hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults2.tex, append dec(5)
+
+*regress wealth index against dependent variables
+reg hv270 hv206
+reg hv270 hv208
+reg hv270 hv210
+reg hv270 hv211
+*very highly positively correlated with electricity and color television
+*negatively correlated with bicycle and motorcycle
+
+
+***exclude wealth index
+
+*placebo
+*household accessories
+reg hv206 timep treatment didp hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults31.tex, replace dec(3)
+
+reg hv208 timep treatment didp hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults31.tex, append dec(3)
+
+reg hv210 timep treatment didp hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults31.tex, append dec(3)
+
+reg hv211 timep treatment didp hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults31.tex, append dec(3)
+
+
+
+*height/age percentile
+reg ha4_1 timep treatment didp hv009 hv104_01 if hv105_01 < 25, cluster(hv024)
+outreg2 using GhanaResults41.tex, replace dec(3)
+
+reg ha4_2 timep treatment didp hv009 hv104_02 if hv105_02 < 25, cluster(hv024)
+outreg2 using GhanaResults41.tex, append dec(3)
+
+
+*hemoglobin level
+reg hc56_1 timep treatment didp hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults41.tex, append dec(3)
+
+reg hc56_2 timep treatment didp hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults41.tex, append dec(3)
+
+
+*body mass
+reg ha40_1 timep treatment didp hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults41.tex, append dec(3)
+
+reg ha40_2 timep treatment didp hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults41.tex, append dec(3)
+
+
+
+*DID regressions
+*household accessories
+reg hv206 time treatment did hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults51.tex, replace dec(3)
+
+reg hv208 time treatment did hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults51.tex, append dec(3)
+
+reg hv210 time treatment did hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults51.tex, append dec(3)
+
+reg hv211 time treatment did hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults51.tex, append dec(3)
+
+
+
+*height/age percentile
+reg ha4_1 time treatment did hv009 hv104_01 if hv105_01 < 25, cluster(hv024)
+outreg2 using GhanaResults61.tex, replace dec(3)
+
+reg ha4_2 time treatment did hv009 hv104_02 if hv105_02 < 25, cluster(hv024)
+outreg2 using GhanaResults61.tex, append dec(3)
+
+
+
+*hc56: hemoglobin level
+reg hc56_1 time treatment did hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults61.tex, append dec(3)
+
+reg hc56_2 time treatment did hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults61.tex, append dec(3)
+
+
+*ha40: body mass
+reg ha40_1 time treatment did hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults61.tex, append dec(3)
+
+reg ha40_2 time treatment did hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults61.tex, append dec(3)
+
+
+
+***test if results depends on month surveyed
+
+*new time and DID variables
+gen time_so = .
+replace time_so = 0 if year == 2008
+replace time_so = 1 if year == 2014 & hv006 < 11
+
+gen time_nd = .
+replace time_nd = 0 if year == 2008
+replace time_nd = 1 if year == 2014 & hv006 > 10
+
+gen did_so = time_so*treatment
+gen did_nd = time_nd*treatment
+
+
+**DID for surveys done in september/october
+*household accessories
+reg hv206 time_so treatment did_so hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults52.tex, replace dec(3)
+
+reg hv208 time_so treatment did_so hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults52.tex, append dec(3)
+
+reg hv210 time_so treatment did_so hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults52.tex, append dec(3)
+
+reg hv211 time_so treatment did_so hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults52.tex, append dec(3)
+
+
+
+*height/age percentile
+reg ha4_1 time_so treatment did_so hv009 hv104_01 if hv105_01 < 25, cluster(hv024)
+outreg2 using GhanaResults62.tex, replace dec(3)
+
+reg ha4_2 time_so treatment did_so hv009 hv104_02 if hv105_02 < 25, cluster(hv024)
+outreg2 using GhanaResults62.tex, append dec(3)
+
+*hc56: hemoglobin level
+reg hc56_1 time_so treatment did_so hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults62.tex, append dec(3)
+
+reg hc56_2 time_so treatment did_so hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults62.tex, append dec(3)
+
+*ha40: body mass
+reg ha40_1 time_so treatment did_so hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults62.tex, append dec(3)
+
+reg ha40_2 time_so treatment did_so hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults62.tex, append dec(3)
+
+
+**DID for surveys done in november/december
+*household accessories
+reg hv206 time_nd treatment did_nd hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults53.tex, replace dec(3)
+
+reg hv208 time_nd treatment did_nd hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults53.tex, append dec(3)
+
+reg hv210 time_nd treatment did_nd hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults53.tex, append dec(3)
+
+reg hv211 time_nd treatment did_nd hv009 hv220 head_sex, cluster(hv024)
+outreg2 using GhanaResults53.tex, append dec(3)
+
+*height/age percentile
+reg ha4_1 time_nd treatment did_nd hv009 hv104_01 if hv105_01 < 25, cluster(hv024)
+outreg2 using GhanaResults63.tex, replace dec(3)
+
+reg ha4_2 time_nd treatment did_nd hv009 hv104_02 if hv105_02 < 25, cluster(hv024)
+outreg2 using GhanaResults63.tex, append dec(3)
+
+*hc56: hemoglobin level
+reg hc56_1 time_nd treatment did_nd hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults63.tex, append dec(3)
+
+reg hc56_2 time_nd treatment did_nd hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults63.tex, append dec(3)
+
+*ha40: body mass
+reg ha40_1 time_nd treatment did_nd hv009 hv105_01 hv104_01, cluster(hv024)
+outreg2 using GhanaResults63.tex, append dec(3)
+
+reg ha40_2 time_nd treatment did_nd hv009 hv105_02 hv104_02, cluster(hv024)
+outreg2 using GhanaResults63.tex, append dec(3)
+
+
+
+***statistical test of qualitative characteristics
+
+*number of household members
+reg hv009 treatment if year == 1993
+outreg2 using QualChar1.tex, replace dec(3)
+
+reg hv009 treatment if year == 1998
+outreg2 using QualChar1.tex, append dec(3)
+
+reg hv009 treatment if year == 2003
+outreg2 using QualChar1.tex, append dec(3)
+
+reg hv009 treatment if year == 2008
+outreg2 using QualChar1.tex, append dec(3)
+
+reg hv009 treatment if year == 2014
+outreg2 using QualChar1.tex, append dec(3)
+
+*number of children 5 and under
+reg hv014 treatment if year == 1993
+outreg2 using QualChar2.tex, replace dec(3)
+
+reg hv014 treatment if year == 1998
+outreg2 using QualChar2.tex, append dec(3)
+
+reg hv014 treatment if year == 2003
+outreg2 using QualChar2.tex, append dec(3)
+
+reg hv014 treatment if year == 2008
+outreg2 using QualChar2.tex, append dec(3)
+
+reg hv014 treatment if year == 2014
+outreg2 using QualChar2.tex, append dec(3)
+
+*sex of head of household
+reg head_sex treatment if year == 1993
+outreg2 using QualChar3.tex, replace dec(3)
+
+reg head_sex treatment if year == 1998
+outreg2 using QualChar3.tex, append dec(3)
+
+reg head_sex treatment if year == 2003
+outreg2 using QualChar3.tex, append dec(3)
+
+reg head_sex treatment if year == 2008
+outreg2 using QualChar3.tex, append dec(3)
+
+reg head_sex treatment if year == 2014
+outreg2 using QualChar3.tex, append dec(3)
+
+*age of head of household
+reg hv220 treatment if year == 1993
+outreg2 using QualChar4.tex, replace dec(3)
+
+reg hv220 treatment if year == 1998
+outreg2 using QualChar4.tex, append dec(3)
+
+reg hv220 treatment if year == 2003
+outreg2 using QualChar4.tex, append dec(3)
+
+reg hv220 treatment if year == 2008
+outreg2 using QualChar4.tex, append dec(3)
+
+reg hv220 treatment if year == 2014
+outreg2 using QualChar4.tex, append dec(3)
+
+*wealth index
+reg hv270 treatment if year == 1993
+outreg2 using QualChar5.tex, replace dec(3)
+
+reg hv270 treatment if year == 1998
+outreg2 using QualChar5.tex, append dec(3)
+
+reg hv270 treatment if year == 2003
+outreg2 using QualChar5.tex, append dec(3)
+
+reg hv270 treatment if year == 2008
+outreg2 using QualChar5.tex, append dec(3)
+
+reg hv270 treatment if year == 2014
+outreg2 using QualChar5.tex, append dec(3)
