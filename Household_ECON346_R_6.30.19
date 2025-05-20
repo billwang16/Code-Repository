@@ -1,0 +1,465 @@
+---
+  title: 'Household Structural Estimation'
+author: "Bill Wang"
+date: "June 11, 2019"
+output: word_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# clean memory
+rm(list=ls())
+# load useful packages
+library(foreign)
+library(dplyr)
+library(readstata13)
+library(bigmemory)
+library(reshape)
+library(ggplot2)
+library(data.table)
+library(nloptr)
+library(kernlab)
+library(data.table)
+library(ggplot2)
+library(optimization)
+
+```
+
+
+
+# before we proceed into our analysis, we generate the variables
+```{r}
+# generate treatment variable
+r <- 0.04
+beta <- 0.98
+theta <- 0.3 
+t<-  (1:60)
+income<-   rep(90000,60)
+income[41:60]<-  0 
+real_income <- income*((1+r)^(60-t))
+life_income  <- sum(real_income )
+```
+#we compare four different methods to solve parts a) and b). we find similar results amongst the methods and present the findings from method 1. 
+
+# (a) method1: analytical solution
+```{r}
+#In this first method, we compute first order conditions to solve for optimal allocations.
+
+#discounting between periods
+discount_factor_beta<- (beta^(t-1))
+sum_discount_factor_beta<- sum(discount_factor_beta)
+
+#lambda from Lagrangian
+lamda_reverse<-   rep(0,60)
+lamda_reverse[1]<-  life_income/(sum_discount_factor_beta*((1+r)^59))
+lamda_reverse<-lamda_reverse[1]*((beta*(1+r))^(t-1))
+
+#solutions for C and Q
+cta<-0.2*lamda_reverse
+ctb<-0.2*lamda_reverse
+q<-0.6*lamda_reverse
+
+#compute A 
+at<-   rep(0,60)
+for(i in 2:60){
+  at[i]<-  (1+r)*( at[i-1]+income[i-1]-cta[i-1]-ctb[i-1]-q[i-1]) 
+  
+}
+
+#output
+at_a<- at
+at_a
+```
+# (a) method2: analytical solution
+
+```{r}
+#In this second method, we use Euler equation to compute consumption in every period as a function of consumption in period 1.
+#We then simutaneously solve for entire consumption/savings path.
+
+#compute discounting between periods
+discount_factor_beta<- (beta^(t-1))
+sum_discount_factor_beta<- sum(discount_factor_beta)
+
+#compute consumption as a function of c1 based on Euler equations
+consumption<-   rep(0,60)
+consumption[1]<-  life_income/(sum_discount_factor_beta*((1+r)^59))
+consumption<-consumption[1]*((beta*(1+r))^(t-1))
+
+#compute asset path
+at<-   rep(0,60)
+for(i in 2:60){
+  at[i]<-  (1+r)*( at[i-1]+income[i-1]-consumption[i-1]) 
+  
+}
+
+#output of consumption
+c
+
+#output of assets
+at_a<- at
+at_a
+```
+
+# (a)method 3: forward propogation
+```{r}
+#In this method, we write consumption and asset pathways as a function of consumption in period 1. 
+#We then solve for optimal consumption/savings iteratively from period 1 to 60.
+
+#define utility function
+utility_function <- function(x1,x2,x3){
+  u<- 0.2*log(x1)+0.2*log(x2)+0.6*log(x3)
+  return(u)
+}
+
+#forward propogation
+Maximization_function <- function(C1){
+  C<-   rep(0,60)
+  C[1]<-C1
+  A<-   rep(0,61)
+  
+  #iteratively write consumption and asset as a function of consumption in period 1
+  for (i in 2:60) {
+    A[i]<-(A[i-1]+income[i-1]-C[i-1])*(1+r)
+    C[i]<-C[i-1]*(beta*(1+r))
+  }
+  A[61]<-(A[60]+income[60]-C[60])*(1+r)
+  
+  if (A[61]<0) {C<- rep(0.0000001,60)}
+  
+  #optimal allocations of Ca, Cb, and Q
+  Ca<- rep(0,60)
+  Cb<- rep(0,60)
+  Q<- rep(0,60)
+  Ca<-C*0.2
+  Cb<-C*0.2
+  Q<-C*0.6
+  
+  value<-0
+  
+  #compute value function
+  for (i in 1:60)
+  { tem_value<-0 
+  tem_value<-utility_function(Ca[i],Cb[i],Q[i])
+  value<-value+ tem_value*beta^(i-1)
+  }
+  
+  return(value)
+}
+
+#optimize respect to consumption in c1
+opt_c <- optim_sa(Maximization_function, start = 0,TRUE,FALSE,0,3600000)
+print(opt_c$par)
+print(opt_c$function_value)
+
+C<- rep(0,60)
+C[1]<-opt_c$par
+A<-   rep(0,61)
+
+#iteratively solve consumption/asset path respect to optimal c1
+for (i in 2:60) {
+  A[i]<-(A[i-1]+income[i-1]-C[i-1])*(1+r)
+  C[i]<-C[i-1]*(beta*(1+r))
+}
+A[61]<-(A[60]+income[60]-C[60])*(1+r)
+
+if (A[61]<0) {C<- rep(0,60)}
+A
+
+
+```
+# (a)method 4: backward propogation
+```{r}
+#In this method, we write consumption and asset pathways as a function of consumption in period 60. 
+#We then solve for optimal consumption/savings iteratively from period 60 to 1.
+
+#define utility function
+utility_function_backward <- function(x1,x2,x3){
+  u<- 0.2*log(x1)+0.2*log(x2)+0.6*log(x3)
+  return(u)
+}
+
+
+Maximization_function_backward <- function(C60){
+  C<- rep(0,60)
+  C[60]<- C60
+  A<- rep(0,61)
+  
+  #write consumption/asset pathways as a function of consumption in period 60
+  for (i in 1:59) {
+    A[61-i]<- A[62-i]/(1+r)+ C[61-i]-income[61-i]
+    C[60-i]<-  C[61-i]/(beta*(1+r))
+  }
+  A[1]<- (A[2]/(1+r))+C[1]-income[1]
+  if (A[1]>0.0000001) {C<- rep(0,60)}
+  if (A[1]<-0.0000001) {C< rep(0,60)} 
+  
+  #compute optimal Ca, Cb, and Q
+  Ca<- rep(0,60)
+  
+  Cb<- rep(0,60)
+  Q<- rep(0,60)
+  Ca<-C*0.2
+  Cb<-C*0.2
+  Q<-C*0.6
+  
+  value<-0
+  
+  #compute objective function
+  for (i in 1:60)
+    
+  { tem_value<-0 
+  tem_value<-utility_function_backward(Ca[61-i],Cb[61-i],Q[61-i])
+  value <- value+ tem_value*beta^(61-i)
+  }
+  
+  return(value)
+}
+
+#optimizae consumption in period 60
+opt_c <- optim_sa(Maximization_function_backward, start = 0,TRUE,FALSE,0,3600000)
+
+
+print(opt_c$par)
+print(opt_c$function_value)
+
+C <- rep(0,60)
+C[60]<- opt_c$par
+A<- rep(0,61)
+A[61]=0
+
+#compute asset/consumption pathways
+for (i in 1:59) {
+  C[60-i]<-  C[61-i]/(beta*(1+r))
+  A[61-i]<- A[62-i]/(1+r)+ C[61-i]-income[61-i]
+}
+A[1]<-(A[2]/(1+r))-income[1]+C[1]
+
+#output
+A
+```
+
+
+# (b) Method1: analytical solution
+```{r}
+
+j<-0
+
+#discount factor
+discount_factor_beta<- (beta^(t-1))
+sum_discount_factor_beta<- sum(discount_factor_beta)
+lamda_reverse<-   rep(0,60)
+#define matrix to store asset pathways for each theta
+atb<-matrix(0,60,3)
+
+#calculate optimal ratio of cta, ctb, q for each theta
+for(theta in seq(0.3,0.7,0.2))
+{
+  j<-j+1
+lamda_reverse[1]<-  life_income/(sum_discount_factor_beta*(0.2*theta+0.8)*((1+r)^59))
+lamda_reverse<-lamda_reverse[1]*((beta*(1+r))^(t-1))
+cta<-0.4*theta*lamda_reverse
+ctb<-0.2*(1-theta)*lamda_reverse
+q<-0.6*lamda_reverse
+at<-   rep(0,60)
+
+#calculate optimal asset pathway
+for(i in 2:60){
+ at[i]<-  (1+r)*( at[i-1]+income[i-1]-cta[i-1]-ctb[i-1]-q[i-1]) 
+  
+}
+
+atb[,j]<-at
+
+}
+#output
+atb
+```
+
+# (b) Method2: analytical solution
+```{r}
+
+j<-0
+#discount factor
+discount_factor_beta<- (beta^(t-1))
+sum_discount_factor_beta<- sum(discount_factor_beta)
+
+#define matrix to store asset pathways for each theta
+atb<-matrix(0,60,3)
+consumption<-   rep(0,60)
+#write consumption pathway as a function of consumption in period 1 for each theta value
+for(theta in seq(0.3,0.7,0.2))
+{
+  j<-j+1
+consumption[1]<-  life_income/(sum_discount_factor_beta*(0.2*theta+0.8)*((1+r)^59))
+consumption<-consumption[1]*((beta*(1+r))^(t-1))
+at<-   rep(0,60)
+
+#solve for asset pathways
+for(i in 2:60){
+ at[i]<-  (1+r)*( at[i-1]+income[i-1]-consumption[i-1]) 
+  
+}
+
+atb[,j]<-at
+
+}
+
+#output
+atb
+```
+
+
+
+# (b) Method3: forward propogation
+```{r}
+
+j<-0
+#define matrix to store asset pathways for each theta
+atb<-matrix(0,60,3)
+
+#we solve problem for each theta
+for(theta in seq(0.3,0.7,0.2))
+{
+  
+j<-j+1
+
+#define utility function
+utility_function <- function(x1,x2,x3){
+u<- theta*(0.4*log(x1)+0.6*log(x3))+(1-theta)*(0.2*log(x2)+0.6*log(x3))
+  return(u)
+}
+
+#optimize consumption in period 1
+opt_c <- optim_sa(Maximization_function, start = 0,TRUE,FALSE,0,3600000)
+print(opt_c$par)
+print(opt_c$function_value)
+
+C<- rep(0,60)
+C[1]<-opt_c$par
+A<-   rep(0,61)
+
+#compute asset/consumption pathways
+for (i in 2:60) {
+  A[i]<-(A[i-1]+income[i-1]-C[i-1])*(1+r)
+  C[i]<-C[i-1]*(beta*(1+r))
+}
+A[61]<-(A[60]+income[60]-C[60])*(1+r)
+atb[,j]<-A[1:60]
+}
+
+#output
+atb
+```
+
+# (b) Method4: backward propogation
+```{r}
+
+j<-0
+#define matrix to store asset pathways for each theta
+atb<-matrix(0,60,3)
+
+#solve for each theta
+for(theta in seq(0.3,0.7,0.2))
+{
+  
+j<-j+1
+
+#utility function
+utility_function <- function(x1,x2,x3){
+u<- theta*(0.4*log(x1)+0.6*log(x3))+(1-theta)*(0.2*log(x2)+0.6*log(x3))
+  return(u)
+}
+
+#optimize consumption in period 60
+opt_c <- optim_sa(Maximization_function_backward, start = 0,TRUE,FALSE,0,3600000)
+print(opt_c$par)
+print(opt_c$function_value)
+
+C <- rep(0,60)
+C[60]<- opt_c$par
+A<- rep(0,61)
+A[61]=0
+
+#compute consumption/asset pathways
+for (i in 1:59) {
+  C[60-i]<-  C[61-i]/(beta*(1+r))
+  A[61-i]<- A[62-i]/(1+r)+ C[61-i]-income[61-i]
+}
+A[1]<-(A[2]/(1+r))-income[1]+C[1]
+atb[,j]<-A[1:60]
+}
+
+#output
+atb
+```
+
+
+# (d) Method1: analytical solution
+```{r}
+
+j<-0
+
+#discount factor
+discount_factor_beta<- (beta^(t-1))
+sum_discount_factor_beta<- sum(discount_factor_beta)
+
+#define matrix to store asset pathways for each theta
+atd<-matrix(0,60,3)
+
+#calculate optimal ratio of cta, ctb, q for each theta
+for(theta in seq(0.3,0.7,0.2))
+{
+  j<-j+1
+  lamda_reverse<-   rep(0,60)
+lamda_reverse[1]<-  life_income/(sum_discount_factor_beta*((1+r)^59))
+lamda_reverse<-lamda_reverse[1]*((beta*(1+r))^(t-1))
+cta<-0.3*theta*lamda_reverse
+ctb<-0.3*(1-theta)*lamda_reverse
+q<-0.7*lamda_reverse
+at<-   rep(0,60)
+
+#calculate optimal asset pathway
+for(i in 2:60){
+ at[i]<-  (1+r)*( at[i-1]+income[i-1]-cta[i-1]-ctb[i-1]-q[i-1]) 
+  
+}
+
+atd[,j]<-at
+
+}
+#output
+atd
+```
+
+# (d) Method2: analytical solution
+```{r}
+
+j<-0
+#discount factor
+discount_factor_beta<- (beta^(t-1))
+sum_discount_factor_beta<- sum(discount_factor_beta)
+
+#define matrix to store asset pathways for each theta
+atd<-matrix(0,60,3)
+consumption<-   rep(0,60)
+#write consumption pathway as a function of consumption in period 1 for each theta value
+for(theta in seq(0.3,0.7,0.2))
+{
+  j<-j+1
+consumption[1]<-  life_income/(sum_discount_factor_beta*((1+r)^59))
+consumption<-consumption[1]*((beta*(1+r))^(t-1))
+at<-   rep(0,60)
+
+#solve for asset pathways
+for(i in 2:60){
+ at[i]<-  (1+r)*( at[i-1]+income[i-1]-consumption[i-1]) 
+  
+}
+
+atd[,j]<-at
+
+}
+
+#output
+atd
