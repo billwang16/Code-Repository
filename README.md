@@ -1,3 +1,3 @@
 Author: Bill Wang
 
-Welcome to my GitHub page! All of my projects are sorted into relevant folders.
+Welcome to my GitHub page! My projects can be found in their relevant folders.
