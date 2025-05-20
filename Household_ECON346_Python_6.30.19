@@ -1,0 +1,250 @@
+import numpy as np
+#define an array for income and empty array for assets
+y_a = np.zeros(60)
+y_a[0:39] = .5
+
+y_b = np.zeros(60)
+y_b[0:39] = .4
+
+asset = np.linspace(0,20,num=100)
+na = len(asset)
+value = np.zeros((na,61))
+policy = np.zeros((na,60))
+
+for t in range(60):
+    for ia in range(na):
+        a_t = asset[ia]
+        current_max = -10e12
+         #for each possible asset value at time t, find a random asset value at t+1, 
+        #I solved for consumption level analytically by defining delta to be the total sum of consumption
+        #I define the value function from bellman
+        #Then I plugged in all these possible consumption bundles to see which one yields the greatest value
+        #I'm looking for a policy function that links asset in period t+1 and asset in period t
+        for ia_next in range(na):
+            a_tnext = asset[ia_next]
+            delta = a_t + y_a[59 - t]+y_b[59 - t]-(a_tnext/1.04)
+            if delta > 0:
+                c_a = delta/5
+                c_b = delta/5
+                q = (3*delta)/5
+                v_temp = 0.2*np.log(c_a)+0.2*np.log(c_b)+0.6*np.log(q)+0.98*value[ia_next,t]
+            else:
+                v_temp = -10e14
+            if v_temp > current_max:
+                current_max = v_temp
+                policy[ia,t] = ia_next
+  #record this largest asset value in the policy function 
+        value[ia,t+1] = current_max    
+
+a = 0       
+lifecycle = np.zeros(61)   
+    
+for i in range(60):
+    lifecycle[i+1] = asset[int(policy[a,59-i])]
+    a = int(policy[a,59-i])    
+
+#########
+
+#The method is essentially the same with part a, only that I changed it to a function
+#that takes different values of theta
+#The assets path are the same for all values of theta     
+import numpy as np
+def life_cycle(theta):
+    y_a = np.zeros(60)
+    y_a[0:39] = .5
+
+    y_b = np.zeros(60)
+    y_b[0:39] = .4
+
+    asset = np.linspace(0,20,num=100)
+    na = len(asset)
+    value = np.zeros((na,61))
+    policy = np.zeros((na,60))
+
+    for t in range(60):
+        for ia in range(na):
+            a_t = asset[ia]
+            current_max = -10e10
+            for ia_next in range(na):
+                a_tnext = asset[ia_next]
+                delta = a_t + y_a[59 - t]+y_b[59 - t]-(a_tnext/(1+0.04))
+                if delta > 0:
+                    c_a = (0.4*theta*delta)/(1.2+0.2*theta)
+                    c_b = ((0.2-0.2*theta)*delta)/(1.2+0.2*theta)
+                    q = delta/(1.2+0.2*theta)
+                    v_temp = theta*np.log(c_a)+(1-theta)*np.log(c_b)+0.6*np.log(q)+0.98*value[ia_next,t]
+                else:
+                    v_temp = -10e14
+                if v_temp > current_max:
+                    current_max = v_temp
+                    policy[ia,t] = ia_next
+                
+            value[ia,t+1] = current_max    
+        
+    a = 0       
+    lifecycle = np.zeros(61)
+
+    for i in range(60):
+        lifecycle[i] = asset[int(policy[a,59-i])]
+        a = int(policy[a,59-i])    
+    return lifecycle             
+                
+
+
+output1 = life_cycle(0.2)   
+output2 = life_cycle(0.5)
+output3 = life_cycle(0.8)
+
+######
+
+import pandas as pd
+
+df = pd.read_excel('C:/Users/Nicole/Documents/Course Documents/Labor Economics/final_project/death.xlsx')
+death = df.as_matrix()
+import numpy as np
+import matplotlib.pyplot as plt
+
+#define a similar function following from part a and part b, but now since each individual has probability to die,
+#there are three dynamic programming problems involved, I figured out three possible scenarios in which:
+#person A survives (corresponding with valuea, policya), person B survives (corresponding with valueb, policyb), or both survive to the end (corresponding with valueab, policyab)
+#Note: To ease the computation, I scaled down the income by 10e5
+
+def life_cycle(theta):
+#define income 
+    y_a = np.zeros(60)
+    y_a[0:39] = .5
+
+    y_b = np.zeros(60)
+    y_b[0:39] = .4
+#define an empty array for assets, arrays for value function for the three scenarios, and arrays for policy functions
+    asset = np.linspace(0,20,num=200)
+    #increasing the num of assets essentially increases the number of grids, and can thus improve precision
+    na = len(asset)
+    valueab = np.zeros((na,61))
+    valuea = np.zeros((na,61)) 
+    valueb = np.zeros((na,61)) 
+    policyab = np.zeros((na,60))
+    policya = np.zeros((na,60))
+    policyb = np.zeros((na,60))
+    
+    for t in range(60):
+        if t <= 19:
+      #scenario when Person A survives       
+            for ia in range(na):
+                a_t = asset[ia]
+                current_maxa = -10e10
+                for ia_next in range(na):
+                    a_tnext = asset[ia_next]
+                    #define delta to be the sum of all consumptions
+                    delta = a_t + y_a[59 - t] -(a_tnext/(1+0.04))
+                    # compute the consumption for person a if person b dies
+                    if delta > 0:
+                        proba = (1-df.iat[19 - t, 0])
+                        ca = (2/5)*delta
+                   
+                        qa = (3/5)*delta
+                    
+                        v_tempa = 0.4*np.log(ca)+ 0.6*np.log(qa)+0.98*(proba*valuea[ia_next,t])
+                    else:
+                        v_tempa = -10e14
+                    if v_tempa > current_maxa:
+                        current_maxa = v_tempa
+                        policya[ia,t] = ia_next
+                #record the greatest value for the value function 
+                valuea[ia,t+1] = current_maxa
+        if t <= 19:  
+            #scenario when Person B survives: 
+            for ib in range(na):
+                b_t = asset[ib]
+                current_maxb = -10e10
+                #similar for B, I selected the asset level for period t+1 that will yield the largest value for value function 
+                for ib_next in range(na):
+                    b_tnext = asset[ib_next]
+                    delta = b_t + y_b[59 - t] -(b_tnext/(1+0.04))
+                #compute consumption level for person B 
+                    if delta > 0:
+                        probb = (1 - df.iat[19 - t, 1])
+                        cb = (1/4)*delta
+                   
+                        qb = (3/4)*delta
+                    #value function for person B
+                        v_tempb = 0.2*np.log(cb)+ 0.6*np.log(qb)+ 0.98*(probb*valueb[ib_next,t])
+                    else:
+                        v_tempb = -10e14
+                    if v_tempb > current_maxb:
+                        current_maxb = v_tempb
+                        policyb[ib,t] = ib_next    
+                        
+                valueb[ib,t+1] = current_maxb   
+
+        if t <= 19:  
+    #scenario when both people survive               
+            for iab in range(na):
+                ab_t = asset[iab]         
+                current_maxab = -10e10
+                for iab_next in range(na):
+                    ab_tnext = asset[iab_next]
+                    delta = ab_t + y_a[59 - t]+y_b[59 - t]-(ab_tnext/(1 + 0.04))
+                
+                    if delta > 0:
+                    #probability when both people survive 
+                        proba = (1 - df.iat[19 - t, 0])*(df.iat[19 - t, 1])
+                        probb = (1 - df.iat[19 - t, 1])*(df.iat[19 - t, 0])
+                        probab = (1 - df.iat[19 - t, 0]) * (1 - df.iat[19 - t, 1])
+                    #consumption level (solved analytically) for each good
+                        ca_ab = (0.4*theta*delta)/(1.2+0.2*theta)
+                        cb_ab = ((0.2-0.2*theta)*delta)/(1.2+0.2*theta)
+                        q_ab = delta/(1.2+0.2*theta)
+                                   
+                        v_tempab = theta*0.4*np.log(ca_ab)+(1-theta)*0.2*np.log(cb_ab)+0.6*np.log(q_ab)+0.98*(proba*valuea[iab_next,t] + probb*valueb[iab_next,t] + probab*valueab[iab_next,t])
+                    else:
+                        v_tempab = -10e14
+                    if v_tempab > current_maxab:
+                        current_maxab = v_tempab
+                        policyab[iab,t] = iab_next
+                
+                valueab[iab,t+1] = current_maxab   
+        if t>= 20: 
+            #when t is greater than 20, i.e., when looking at the first 40 periods, both spouses are going to live
+            #so there is no stochastic process here, the problem is the same as in part b
+            for iab in range(na):
+                ab_t = asset[iab]
+                current_maxab = -10e10
+                for iab_next in range(na):
+                    ab_tnext = asset[iab_next]
+                    delta = ab_t + y_a[59 - t]+y_b[59 - t]-(ab_tnext/(1+0.04))
+                    if delta > 0:
+                        c_a = (0.4*theta*delta)/(1.2+0.2*theta)
+                        c_b = ((0.2-0.2*theta)*delta)/(1.2+0.2*theta)
+                        q = delta/(1.2+0.2*theta)
+                        v_tempab = theta*np.log(c_a)+(1-theta)*np.log(c_b)+0.6*np.log(q)+0.98*valueab[iab_next,t]
+                    else:
+                        v_tempab = -10e14
+                    if v_tempab > current_maxab:
+                        current_maxab = v_tempab
+                        policyab[iab,t] = iab_next
+                
+                valueab[iab,t+1] = current_maxab    
+
+    a = 0 
+    b = 0
+    ab = 0      
+    lifecycleab = np.zeros(61)
+    lifecyclea = np.zeros(61)
+    lifecycleb = np.zeros(61)
+    #record the policy functions for three scenarios
+    for i in range(60):
+        lifecycleab[i+1] = asset[int(policyab[ab,59-i])]
+        ab = int(policyab[ab,59-i])    
+    return lifecycleab  
+
+    for i in range(60):
+        lifecyclea[i+1] = asset[int(policya[a,59-i])]
+        a = int(policya[a,59-i])    
+    return lifecyclea  
+  
+    for i in range(60):
+        lifecycleb[i+1] = asset[int(policyb[b,59-i])]
+        b = int(policyb[b,59-i])    
+    return lifecycleb   
+
