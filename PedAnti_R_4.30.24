@@ -1,0 +1,3315 @@
+# =============================================================================
+# Import
+# =============================================================================
+
+# --- Full build requires ~???mins --------------------------------------------
+
+library(tidyverse) 
+library(data.table) 
+library(haven) 
+library(lubridate) 
+source('code/utils.R')
+
+printtime(msg='Starting script')
+
+# Initialize the output data frame: 
+event_df <- setDT(data.frame()) 
+	
+# =============================================================================
+# Find all birth dates in 2008-2018:
+# =============================================================================
+
+# --- ~??min ------------------------------------------------------------------
+
+printtime(msg='Starting birth extraction')
+for(y in match(c("10","11","12","13","14","15","16","17","18"), yearlist)){
+
+	# --- ~10min/block --------------------------------------------------------
+
+	# --- Import 's' (inpatient services) table: ------------------------------
+	s_df <- read_sas(filenames_s_sam[y],
+		col_select=c(
+			'AGE',
+			'DX1',
+			'DX2',
+			'ENROLID',
+			'SVCDATE'
+			), 
+		skip=0, n_max=Inf)
+	# 2010sam: 2048118 recs
+
+	# --- Reduce 's' (inpatient services) table: ------------------------------
+	s_df <- setDT(s_df) # Set as data table
+	s_df <- s_df[AGE==0] # Restrict to possible newborns (age = 0)
+	# 2010sam: 162285 recs
+
+	# Equivalent code using substrings for ICD mapping: 
+	# s_df <- s_df[,.(ENROLID,DX1=substr(DX1,1,3), DX2=substr(DX2,1,3),AGE,SVCDATE)]
+	# s_df <- s_df[
+	# 	DX1%in%birthcodes_prefix_list_icd9 | 
+	# 	DX2%in%birthcodes_prefix_list_icd9 | 
+	# 	DX1%in%birthcodes_prefix_list_icd10 | 
+	# 	DX2%in%birthcodes_prefix_list_icd10 ]
+
+	s_df <- s_df[
+		DX1%like%birthcodes_prefix_icd9 | 
+		DX2%like%birthcodes_prefix_icd9 | 
+		DX1%like%birthcodes_prefix_icd10 | 
+		DX2%like%birthcodes_prefix_icd10 ] # Restrict to birth-related ICDs
+	# 2010sam: 96926 recs
+	s_df <- s_df[,.(DATE=min(SVCDATE), EVENT='birth', CODE=''), 
+		by=.(ENROLID)] 
+	# 2010sam: 8369 recs
+
+	# Format like the output table: 
+	event_df <- rbind(event_df, s_df) # bind to the output table
+	rm(s_df) # clear s_df to save memory
+
+	printtime(msg=paste0('    Finished year ',yearlist[y]))
+
+}
+
+event_df <- event_df[,.(DATE=first(DATE), EVENT=first(EVENT), CODE=first(CODE)),by=.(ENROLID)] # Make sure each ENROLID is only represented once 
+# 2010:2018 sample files: 56996 recs
+printtime(msg='Finished first block')
+
+# =============================================================================
+# Restrict eligible set to those with continuous coverage:
+# =============================================================================
+
+printtime(msg='Starting censorship definition')
+memb_df <- setDT(data.frame())
+for(y in match(c("10","11","12","13","14","15","16","17","18"), yearlist)){
+
+	# --- Import 't' (membership detail) table: ~??min ------------------------
+	t_df <- read_sas(filenames_t_sam[y],
+		col_select=c(
+			'AGE',
+			'DTEND',
+			'MEMDAYS',
+			'EGEOLOC',
+			'ENROLID',
+			'MSA',
+			'SEX',
+			'RX'
+			), 
+		skip=0, n_max=Inf)
+	# 2010sam: 13840880 recs
+	# 2018sam: 3357203 recs
+
+	printtime(msg='    Finished import')
+
+	# --- Restrict  to ENROLIDs with continuous coverage: ??min ---------------
+
+	# Make data table: 
+	t_df <- setDT(t_df) 
+	# Restrict to those with a valid birthdate: 
+	t_df <- event_df[,.(ENROLID, DATE)][t_df, nomatch=0, on=.(ENROLID)]
+	# 2010sam: 47652 recs
+	# 2018sam: 180586 recs
+	# Restrict to those with prescription data: 
+	t_df <- t_df[RX==1]
+	# 2010sam: 42425 recs
+	# 2018saam: 172668 recs
+	t_df <- t_df[,RX:=NULL]
+	# Rename DATE column as birthdate: 
+	setnames(t_df, 'DATE', 'BIRTH_DATE')
+	# Store colums for birth month and birth year
+	t_df <- t_df[,BIRTH_MONTH:=month(BIRTH_DATE)]
+	t_df <- t_df[,BIRTH_YEAR:=year(BIRTH_DATE)]
+	# Restrict to those under 5 (first 5 years of life): 
+	t_df <- t_df[AGE<5]
+	# 2010sam: 42425 recs
+	# 2018sam: 122574 recs
+	# Keep only rows corresponding to full months or the birth month: 
+	t_df <- t_df[,DT_MONTH:=month(DTEND)]
+	t_df <- t_df[,DT_YEAR:=yearlist_num_long[1]+(y-1)]
+	t_df <- dayspermonth[t_df, on=.(DT_MONTH)]
+	t_df <- t_df[(MEMDAYS>=NDAYS | 
+		((month(BIRTH_DATE)==DT_MONTH) & (year(BIRTH_DATE)==DT_YEAR)))]
+	t_df <- t_df[,NDAYS:=NULL]
+	# 2010sam: 42371 recs
+	# 2018sam: 122542 recs
+
+	# Restrict to those with a valid state
+	t_df <- egeoloclist[t_df, nomatch=0, on=.(EGEOLOC)]
+	t_df <- t_df[,EGEOLOC:=NULL]
+	# 2010sam: 42273 recs
+	# 2018sam: 113337 recs
+
+	# Append restricted membership detail to memb_df 
+	memb_df <- rbind(memb_df, t_df) 
+	rm(t_df)
+
+	printtime(msg=paste0('    Finished year ',yearlist[y]))
+
+	}
+# 2010-2018 sample memb_df: 1129099 recs
+
+# Assign an index to each month of membership that counts from birth month:
+memb_df <- memb_df[,INDEX:=12*(DT_YEAR-BIRTH_YEAR)+(DT_MONTH-BIRTH_MONTH)]
+# Restrict to indices from the month after birth through end of enrollment:
+memb_df <- memb_df[INDEX>=min(index_df$INDEX) & INDEX<=max(index_df$INDEX)]
+# sam: 1098006 recs
+# Find the first missing month for each person: 
+memb_df <- memb_df[,CENSORINDEX:=min(setdiff(c(index_df$INDEX,Inf), .SD$INDEX)), by=.(ENROLID)]
+# sam: 1098006 recs
+# Cut off all months past the censor month:
+memb_df <- memb_df[INDEX<CENSORINDEX]
+# sam: 933316 recs
+# Get rid of the censor index column:
+memb_df <- memb_df[,CENSORINDEX:=NULL]
+# Append the censorship date: 
+memb_df <- memb_df[,CENSOR_DATE:=max(DTEND), by=.(ENROLID)]
+
+# Add censorship dates to event_df: 
+# Find censorship dates: 
+censor_df <- memb_df[,.(DATE=first(CENSOR_DATE), EVENT="censored", CODE=""),by=.(ENROLID)]
+# Restrict event_df to people who also have a censorship date: 
+event_df <- censor_df[,.(ENROLID)][event_df, nomatch=0, on=.(ENROLID)]
+# Bind censorship dates to event_df: 
+event_df <- rbind(event_df, censor_df) 
+# Remove censorship dates data table: 
+rm(censor_df) 
+
+# Generate lookup table for membership attributes: 
+memb_df <- memb_df[,.(STATE=first(STATE), MSA=first(MSA), SEX=first(SEX), BIRTH_DATE=first(BIRTH_DATE), CENSOR_DATE=first(CENSOR_DATE)),by=.(ENROLID)]
+# sam: 45071 recs
+memb_df <- memb_df[,NDAYS:=as.integer(difftime(CENSOR_DATE,BIRTH_DATE,units="days"))]
+# sam: 45071 recs
+
+
+# Restrict to people in the data for 1800 continuous days (comment out if censored data is ok): 
+# maxdays <- 1800
+# memb_df <- memb_df[difftime(CENSOR_DATE, BIRTH_DATE, units="days")>=1800,]
+# memb_df <- memb_df[,CENSOR_DATE:=BIRTH_DATE+days(maxdays)]
+# memb_df <- memb_df[,NDAYS:=maxdays]
+
+
+# Restrict to people in the data for 1800 continuous days, or 1800 - n*360 days for years after 2012 (comment out if censored data is ok): 
+# maxdays_df <- setDT(data.frame(BIRTH_YEAR=2008:2016, maxdays=c(30*12*5, 30*12*5, 30*12*5, 30*12*5, 30*12*5, 30*12*4, 30*12*3, 30*12*2, 30*12*1)))
+# memb_df <- maxdays_df[memb_df[,.(ENROLID, STATE, MSA, SEX, BIRTH_DATE, BIRTH_YEAR=year(BIRTH_DATE), CENSOR_DATE)], on=.(BIRTH_YEAR)][
+# 	difftime(CENSOR_DATE, BIRTH_DATE, units="days")>=maxdays][
+# 	,CENSOR_DATE:=BIRTH_DATE+days(maxdays)][
+# 	,NDAYS:=maxdays][
+# 	,.(ENROLID,STATE,MSA,SEX,BIRTH_DATE,CENSOR_DATE,NDAYS)]
+
+write_csv(memb_df, path="output/buildfiles/letter/memb_df.csv")
+
+printtime(msg='    Finished reduction')
+
+#####
+
+# Store NDCs for key drug classes ---------------------------------------------
+antibiotics <- redbook %>% 
+	filter(grepl('Antibiot',THRCLDS))
+
+adrenals <- redbook %>% 
+	filter(grepl('Adrenals & Comb',THRCLDS))
+	# filter(grepl('Sympathomimetic Agents',THRCLDS))
+
+setDT(antibiotics)
+setDT(adrenals)
+
+# Set run parameters ----------------------------------------------------------
+alphasig <- 0.05 # for 95% CIs 
+
+cohort_sizes <- memb_df[,.(ENROLID, BIRTH_YEAR=year(BIRTH_DATE))][
+	,.(NMEMB=.N),by=.(BIRTH_YEAR)]
+
+cohort_sizes_state <- memb_df[,.(ENROLID, BIRTH_YEAR=year(BIRTH_DATE), STATE)][
+	,.(NMEMB=.N),by=.(BIRTH_YEAR, STATE)]
+
+load("data/state_boundaries.RData") 
+
+HHS_boundaries_lwr48 <- state_boundaries %>% 
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(geometry=st_union(geometry))
+
+
+# =============================================================================
+# Membership summary
+# =============================================================================
+
+memb_df %>% 
+	filter(NDAYS==1800) %>% 
+	as_tibble() %>% 
+	makeHHS() %>% 
+	group_by(HHS) %>% 
+	summarise(N=n()) %>% 
+	ungroup() %>% 
+	mutate(PCT=round(N/sum(N)*100,1)) %>% 
+	left_join(HHSnames, by="HHS")
+
+#      HHS     N   PCT HHSname
+#    <dbl> <int> <dbl> <chr>
+#  1     1 11557   5.9 Boston
+#  2     2 18190   9.2 New York
+#  3     3 11930   6.1 Philadelphia
+#  4     4 50796  25.8 Atlanta
+#  5     5 44852  22.8 Chicago
+#  6     6 24230  12.3 Dallas
+#  7     7 11212   5.7 Kansas City
+#  8     8  5569   2.8 Denver
+#  9     9 10625   5.4 San Francisco
+# 10    10  7989   4.1 Seattle
+
+memb_df %>% 
+	filter(NDAYS==1800) %>% 
+	as_tibble() %>% 
+	group_by(SEX) %>% 
+	summarise(N=n()) %>% 
+	ungroup() %>% 
+	mutate(PCT=round(N/sum(N)*100,1))
+
+#   SEX        N   PCT
+#   <chr>  <int> <dbl>
+# 1 1     101315  51.4
+# 2 2      95635  48.6
+
+memb_df %>% 
+	filter(NDAYS==1800) %>% 
+	as_tibble() %>% 
+	mutate(BIRTH_YEAR=year(BIRTH_DATE)) %>% 
+	group_by(BIRTH_YEAR) %>% 
+	summarise(N=n()) %>% 
+	ungroup() %>% 
+	mutate(PCT=round(N/sum(N)*100,1))
+
+#   BIRTH_YEAR     N   PCT
+#        <int> <int> <dbl>
+# 1       2008 40762  20.7
+# 2       2009 42778  21.7
+# 3       2010 38378  19.5
+# 4       2011 40439  20.5
+# 5       2012 34593  17.6
+
+
+
+
+
+# =============================================================================
+# Some causal(?) analysis: 
+# =============================================================================
+
+# source('code/analyze_under5_causal.R')
+
+# =============================================================================
+# Poisson regression
+# =============================================================================
+
+# source('code/analyze_under5_regression.R')
+
+# =============================================================================
+# Table of the most frequent conditions
+# =============================================================================
+
+visit_summary <- visit_df[,.(NVISITS=.N),by=.(COND)][
+	,.(COND,NVISITS,PCTVISITS=NVISITS/sum(NVISITS)*100)] %>%
+	as_tibble() %>%
+	arrange(desc(PCTVISITS))
+
+# > visit_summary
+# # A tibble: 11 x 3
+#    COND                        NVISITS PCTVISITS
+#    <fct>                         <int>     <dbl>
+#  1 NA                          9223526    72.9	// This is 'other'
+#  2 URI (other)                 1552158    12.3
+#  3 Otitis media                1262998     9.98
+#  4 Bronchitis (acute)           189402     1.50
+#  5 Asthma                       118358     0.935
+#  6 SSTI                          85393     0.675
+#  7 Pneumonia                     74699     0.590
+#  8 Intestinal infection          54020     0.427
+#  9 UTI                           47989     0.379
+# 10 Influenza                     34824     0.275
+# 11 Bacterial infection (other)   13657     0.108
+
+visit_change <- visit_df[memb_df, on=.(ENROLID), nomatch=0][
+	,.(ENROLID, BIRTH_YEAR=year(BIRTH_DATE), COND)][
+	,.(NVISITS=.N),by=.(COND, BIRTH_YEAR)] %>% 
+	as_tibble() %>% 
+	pivot_wider(names_from="BIRTH_YEAR", values_from="NVISITS") %>% 
+	mutate(PCTCHANGE=round((`2012` - `2008`)/`2008`*100, 1)) %>%
+	select(COND, `2008`, `2012`, PCTCHANGE) %>% 
+	arrange(PCTCHANGE)
+
+# > visit_change
+# A tibble: 14 x 4
+#    COND                         `2008`  `2012` PCTCHANGE
+#    <fct>                         <int>   <int>     <dbl>
+#  1 UTI                            8763    5259     -40
+#  2 Asthma                        21549   13843     -35.8
+#  3 Sinusitis                     34252   23084     -32.6
+#  4 Bronchitis (acute)            29640   20143     -32
+#  5 Otitis media                 195275  136827     -29.9
+#  6 Pneumonia                     12373    8836     -28.6
+#  7 Viral infection               48288   36550     -24.3
+#  8 Intestinal infection           7648    6033     -21.1
+#  9 URI (other)                  183681  146887     -20
+# 10 Influenza                      5605    4594     -18
+# 11 SSTI                          11927   10207     -14.4
+# 12 NA                          1209747 1057960     -12.5
+# 13 Strep pharyngitis             17743   15709     -11.5
+# 14 Bacterial infection (other)    1503    1831      21.8
+
+# =============================================================================
+# Histogram of birth dates by month
+# =============================================================================
+
+membbymonth <- memb_df[,.(BIRTH_YEAR=year(BIRTH_DATE),BIRTH_MONTH=month(BIRTH_DATE))][,.(NMEMB=.N),by=.(BIRTH_YEAR, BIRTH_MONTH)][
+	,.(YEARFRAC=BIRTH_YEAR+(BIRTH_MONTH-1)/12, NMEMB)] %>% 
+	as_tibble() %>% 
+	arrange(YEARFRAC) %>% 
+	mutate(LABS=case_when(YEARFRAC %in% 2008:2016~as.character(YEARFRAC),TRUE~""))
+
+fig_membbymonth <- membbymonth %>% 
+	ggplot(aes(x=factor(YEARFRAC), y=NMEMB)) + 
+		geom_col(fill="gray") + 
+		# scale_x_discrete(labels=temp$LABS) + 
+		theme_minimal() + 
+		labs(x="Birth month", y="Number of people")
+ggsave(fig_membbymonth, file="figures/under5/membbymonth.pdf",width=8,height=5)
+
+# =============================================================================
+# Cumulative prescriptions over time 
+# =============================================================================
+
+# abx cumulatve: ------------------------------------------------------------- 
+rx_df_abx <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumrx_df_abx <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumrx_df_abx <- rbind(cumrx_df_abx,
+		rx_df_abx[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumrx_df_abx <- cumrx_df_abx[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+cumrx_df_abx[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+cumrx_df_abx[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+cumrx_df_abx[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+cumrx_df_abx[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+cumrx_df_abx <- as_tibble(cumrx_df_abx)
+fig_cumrx_abx <- cumrx_df_abx %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative antibiotic prescriptions", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumrx_abx, file="figures/under5/cumrx_abx.pdf",width=8,height=5)
+
+# adr cumulatve: ------------------------------------------------------------- 
+rx_df_adr <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out adr prescriptions:
+	adrenals[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumrx_df_adr <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumrx_df_adr <- rbind(cumrx_df_adr,
+		rx_df_adr[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumrx_df_adr <- cumrx_df_adr[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+cumrx_df_adr[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+cumrx_df_adr[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+cumrx_df_adr[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+cumrx_df_adr[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+cumrx_df_adr <- as_tibble(cumrx_df_adr)
+fig_cumrx_adr <- cumrx_df_adr %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative adrenals prescriptions", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumrx_adr, file="figures/under5/cumrx_adr.pdf",width=8,height=5)
+
+# combined: -------------------------------------------------------------------
+
+fig_cumrx_combined <- bind_rows(
+	mutate(cumrx_df_abx, CLASS="Antibiotic"),
+	mutate(cumrx_df_adr, CLASS="Adrenal")
+	) %>% 
+	mutate(CLASS=factor(CLASS, levels=c("Antibiotic","Adrenal"))) %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR), fill=factor(BIRTH_YEAR), lty=CLASS)) + 
+		geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.4, col=NA) + 
+		geom_line(stat="smooth", method="loess", span=0.2) + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative prescriptions per person", col="Birth Year", fill="Birth Year", lty="Drug Class") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 	
+ggsave(fig_cumrx_combined, file="figures/under5/cumrx_combined.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Cumulative visits over time by condition:
+# =============================================================================
+
+fig_cumvisit_asthma <- make_cumvisit_fig("Asthma")
+fig_cumvisit_bactinf <- make_cumvisit_fig("Bacterial infection (other)")
+fig_cumvisit_bronch <- make_cumvisit_fig("Bronchitis (acute)")
+fig_cumvisit_flu <- make_cumvisit_fig("Influenza")
+fig_cumvisit_giinf <- make_cumvisit_fig("Intestinal infection")
+fig_cumvisit_om <- make_cumvisit_fig("Otitis media")
+fig_cumvisit_pneumonia <- make_cumvisit_fig("Pneumonia")
+fig_cumvisit_sinusitis <- make_cumvisit_fig("Sinusitis")
+fig_cumvisit_ssti <- make_cumvisit_fig("SSTI")
+fig_cumvisit_strepphar <- make_cumvisit_fig("Strep pharyngitis")
+fig_cumvisit_uri <- make_cumvisit_fig("URI (other)")
+fig_cumvisit_uti <- make_cumvisit_fig("UTI")
+fig_cumvisit_viralinf <- make_cumvisit_fig("Viral infection")
+fig_cumvisit_other <- make_cumvisit_fig(NA)
+
+ggsave(fig_cumvisit_asthma, file="figures/under5/cumvisit_asthma.pdf", width=8, height=5)
+ggsave(fig_cumvisit_bactinf, file="figures/under5/cumvisit_bactinf.pdf", width=8, height=5)
+ggsave(fig_cumvisit_bronch, file="figures/under5/cumvisit_bronch.pdf", width=8, height=5)
+ggsave(fig_cumvisit_flu, file="figures/under5/cumvisit_flu.pdf", width=8, height=5)
+ggsave(fig_cumvisit_giinf, file="figures/under5/cumvisit_giinf.pdf", width=8, height=5)
+ggsave(fig_cumvisit_om, file="figures/under5/cumvisit_om.pdf", width=8, height=5)
+ggsave(fig_cumvisit_pneumonia, file="figures/under5/cumvisit_pneumonia.pdf", width=8, height=5)
+ggsave(fig_cumvisit_sinusitis, file="figures/under5/cumvisit_sinusitis.pdf", width=8, height=5)
+ggsave(fig_cumvisit_ssti, file="figures/under5/cumvisit_ssti.pdf", width=8, height=5)
+ggsave(fig_cumvisit_strepphar, file="figures/under5/cumvisit_strepphar.pdf", width=8, height=5)
+ggsave(fig_cumvisit_uri, file="figures/under5/cumvisit_uri.pdf", width=8, height=5)
+ggsave(fig_cumvisit_uti, file="figures/under5/cumvisit_uti.pdf", width=8, height=5)
+ggsave(fig_cumvisit_viralinf, file="figures/under5/cumvisit_viralinf.pdf", width=8, height=5)
+ggsave(fig_cumvisit_other, file="figures/under5/cumvisit_other.pdf", width=8, height=5)
+
+# =============================================================================
+# Prescription probabilities by condition: 
+# =============================================================================
+
+prx_df <- rx_df[REFILL==0,.(CODE, ASSOC_VISIT_ID, RX_ID=ID)][
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	visit_df, on=.(ASSOC_VISIT_ID=ID)][
+	is.na(RX_ID),NRX:=0][
+	!is.na(RX_ID),NRX:=1][
+	memb_df[,.(ENROLID,BIRTH_YEAR=year(BIRTH_DATE))],on=.(ENROLID),nomatch=0][
+	,.(NVISITS=.N, NRX=sum(NRX)), by=.(BIRTH_YEAR,COND)][
+	] %>% 
+	as_tibble() %>% 
+	mutate(PRX=NRX/NVISITS) %>% 
+	arrange(BIRTH_YEAR, desc(PRX))
+
+fig_prx_trend <- prx_df %>% 
+	filter(BIRTH_YEAR <= 2014) %>% 
+	filter(PRX>0.2) %>% 
+	filter(COND!="Bacterial infection (other)") %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=PRX, col=COND)) + 
+		geom_point() + 
+		geom_line()  + 
+		theme_minimal() +
+		scale_y_continuous(limits=c(0,1)) + 
+		scale_color_brewer(type="qual") + 
+		labs(x="Birth year", y="Antibiotic prescriptions per visit", col="Condition")
+ggsave(fig_prx_trend, file="figures/under5/prx_trend.pdf", width=8, height=5)
+
+# =============================================================================
+# Time to first antibiotic 
+# =============================================================================
+
+# abx -------------------------------------------------------------------------
+first_rx_df_abx <- rx_df_abx[,.(BIRTH_YEAR=first(BIRTH_YEAR), AGE_DAYS=min(AGE_DAYS)), by=.(ENROLID)]
+
+first_cumrx_df_abx <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	first_cumrx_df_abx <- rbind(first_cumrx_df_abx,
+		first_rx_df_abx[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+first_cumrx_df_abx <- first_cumrx_df_abx[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+first_cumrx_df_abx[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+first_cumrx_df_abx[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+first_cumrx_df_abx[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+first_cumrx_df_abx[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+first_cumrx_df_abx <- as_tibble(first_cumrx_df_abx)
+fig_first_cumrx_abx <- first_cumrx_df_abx %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Proportion who have received an antibiotic prescription", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+
+# adr -------------------------------------------------------------------------
+
+first_rx_df_adr <- rx_df_adr[,.(BIRTH_YEAR=first(BIRTH_YEAR), AGE_DAYS=min(AGE_DAYS)), by=.(ENROLID)]
+
+first_cumrx_df_adr <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	first_cumrx_df_adr <- rbind(first_cumrx_df_adr,
+		first_rx_df_adr[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+first_cumrx_df_adr <- first_cumrx_df_adr[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+first_cumrx_df_adr[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+first_cumrx_df_adr[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+first_cumrx_df_adr[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+first_cumrx_df_adr[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+first_cumrx_df_adr <- as_tibble(first_cumrx_df_adr)
+fig_first_cumrx_adr <- first_cumrx_df_adr %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Proportion who have received an adrenal prescription", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+
+# combined --------------------------------------------------------------------
+fig_first_cumrx_combined <- bind_rows(
+	mutate(first_cumrx_df_abx, CLASS="Antibiotic"),
+	mutate(first_cumrx_df_adr, CLASS="Adrenal")
+	) %>% 
+	mutate(CLASS=factor(CLASS, levels=c("Antibiotic","Adrenal"))) %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR), fill=factor(BIRTH_YEAR), lty=CLASS)) + 
+		# geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.4, col=NA) + 
+		geom_line(stat="smooth", method="loess", span=0.2) + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		scale_y_continuous(limits=c(0,1)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Proportion who have received a prescription", col="Birth Year", fill="Birth Year", lty="Drug Class") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+ggsave(fig_first_cumrx_combined, file="figures/under5/first_cumrx_combined.pdf",width=8,height=5)
+
+# =============================================================================
+# Cumulative prescriptions by HHS region
+# =============================================================================
+
+# Cumulative prescriptions
+totrx_df_abx_state <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE)][
+	,.(NRX=.N),by=.(STATE)][
+	memb_df[,.(NMEMB=.N),by=STATE],nomatch=0,on=.(STATE)]
+
+
+fig_totrx_abx_map_HHS <- totrx_df_abx_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=NRX/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean prescriptions per person\nby age 5")
+ggsave(fig_totrx_abx_map_HHS, file="figures/under5/totrx_abx_map_HHS.pdf",width=8,height=5)
+
+fig_totrx_abx_map_state <- totrx_df_abx_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	group_by(STATE) %>%
+	summarise(NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+	left_join(state_boundaries) %>%
+	ggplot(aes(fill=NRX/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean prescriptions per person\nby age 5")
+ggsave(fig_totrx_abx_map_state, file="figures/under5/totrx_abx_map_state.pdf",width=8,height=5)
+
+# =============================================================================
+# visits most frequently associated with (initial) prescriptions
+# =============================================================================
+
+rx_visit_map <- rx_df[REFILL==0][
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		ASSOC_VISIT_ID)]
+
+rx_visit_map <- visit_df[,.(COND,ID)][
+	rx_visit_map,on=c(ID="ASSOC_VISIT_ID")]
+
+linked_rx_summary <- rx_visit_map[,UNLINKED:=if_else(is.na(ID),1,0)][
+	,.(NRX=.N),by=.(COND,UNLINKED,BIRTH_YEAR)] %>%
+	as_tibble() %>%
+	mutate(COND=as.character(COND)) %>%
+	mutate(COND=case_when(UNLINKED==1~"Unlinked",TRUE~COND)) %>%
+	mutate(COND=case_when(is.na(COND)~"Other",TRUE~COND)) %>%
+	select(-UNLINKED) %>%
+	arrange(BIRTH_YEAR,desc(NRX)) %>%
+	group_by(BIRTH_YEAR) %>%
+	mutate(PCTRX=NRX/sum(NRX)*100)
+
+linked_rx_summary %>% 
+	select(COND,BIRTH_YEAR,PCTRX) %>%
+	pivot_wider(names_from=BIRTH_YEAR, values_from=PCTRX)
+
+# COND     `2008`  `2009`  `2010`  `2011`  `2012`  `2013`  `2014` `2015` `2016`
+# <chr>     <dbl>   <dbl>   <dbl>   <dbl>   <dbl>   <dbl>   <dbl>  <dbl>  <dbl>
+# Otitis… 34.3    34.3    34.2    34.3    34.6    36.0    38.7    41.7   39.0
+# Other   26.4    27.0    27.8    29.5    30.9    32.3    33.5    34.3   36.3
+# URI (o… 21.3    21.3    21.0    19.4    17.9    15.9    12.8     9.98  13.7
+# Unlink…  8.35    8.02    7.72    7.51    7.30    6.93    6.65    6.17   3.42
+# Bronch…  3.69    3.55    3.40    3.31    3.12    3.04    3.07    3.19   2.74
+# SSTI     1.89    1.95    2.05    2.15    2.32    2.30    2.17    2.00   1.37
+# Pneumo…  1.77    1.71    1.65    1.64    1.71    1.60    1.43    1.22  NA
+# Asthma   1.14    1.04    1.05    0.921   0.826   0.695   0.599   0.460 NA
+# UTI      0.520   0.502   0.499   0.541   0.516   0.504   0.422   0.345  1.37
+# Bacter…  0.261   0.262   0.276   0.327   0.377   0.388   0.355   0.257  1.37
+# Influe…  0.241   0.239   0.254   0.255   0.266   0.259   0.203   0.183  0.685
+# Intest…  0.0903  0.0934  0.0836  0.0923  0.0812  0.0894  0.0924  0.128 NA
+
+# Which diagnoses are the most common in 'other'? 
+# visit_df[,.(COND,ID,DX)][rx_df[
+# 	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+# 	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+# 	# Inner-join to on 'memb_df' to grab demographic information:
+# 	memb_df,nomatch=0,on=.(ENROLID)][
+# 	# Extract ENROLID, birth year, and age (in days) for each rx:
+# 	,.(ENROLID, 
+# 		BIRTH_YEAR=year(BIRTH_DATE), 
+# 		ASSOC_VISIT_ID)], on=c(ID="ASSOC_VISIT_ID")][
+# 	(!is.na(ID)) & (is.na(COND))][
+# 	,.(NVISITS=.N),by=.(DX)] %>%
+# 	as_tibble() %>%
+# 	arrange(desc(NVISITS)) %>%
+# 	mutate(POTHER=NVISITS/sum(NVISITS)) %>%
+# 	print(n=15)
+
+# =============================================================================
+# PCV uptake over time 
+# =============================================================================
+
+vax_df_pcv <- vax_df[CODE %in% c("90669", "90670")][
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvax_df_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvax_df_pcv <- rbind(cumvax_df_pcv,
+		vax_df_pcv[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumvax_df_pcv <- cumvax_df_pcv[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+cumvax_df_pcv[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+cumvax_df_pcv[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+cumvax_df_pcv[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+cumvax_df_pcv[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+cumvax_df_pcv <- as_tibble(cumvax_df_pcv)
+fig_cumvax_pcv <- cumvax_df_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative PCV vaccinations", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumvax_pcv, file="figures/under5/cumvax_pcv.pdf",width=8,height=5)
+
+
+# The switch over time: -------------------------------------------------------
+fig_pcvuptake <- vax_df[CODE%in%c("90669","90670")][
+	DATE<ymd("2014-01-01")][
+	,.(IS_PCV7=if_else(CODE=="90669",1,0),
+		DT_MONTH=month(DATE), 
+		DT_YEAR=year(DATE))][
+	,.(PROP_PCV7=sum(IS_PCV7)/.N),by=.(DT_MONTH,DT_YEAR)] %>%
+	as_tibble() %>%
+	arrange(DT_YEAR, DT_MONTH) %>%
+	mutate(DATE=ymd(paste0(DT_YEAR,"-",DT_MONTH,"-","01"))) %>%
+	mutate(PROP_PCV13=1-PROP_PCV7) %>% 
+	select(DATE, PROP_PCV7, PROP_PCV13) %>% 
+	pivot_longer(c("PROP_PCV7","PROP_PCV13")) %>%
+	mutate(name=factor(name, levels=c("PROP_PCV7","PROP_PCV13"))) %>% 
+	ggplot(aes(x=DATE, y=value, col=name)) + 
+		geom_point() + 
+		geom_line() + 
+		scale_color_manual(labels=c("PROP_PCV7"="PCV7","PROP_PCV13"="PCV13"), values=c("PROP_PCV7"="red","PROP_PCV13"="blue")) +  
+		labs(x="Month", y="Proportion of pneumococcal vaccines") + 
+		theme_minimal() + 
+		theme(legend.title=element_blank())
+ggsave(fig_pcvuptake, file="figures/under5/pcvuptake.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Gini coefficient
+# =============================================================================
+
+# # abx cumulatve: ------------------------------------------------------------- 
+# ginicoef_df <- rx_df[
+# 	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+# 	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+# 	# Inner-join to on 'memb_df' to grab demographic information:
+# 	memb_df,on=.(ENROLID)][
+# 	,.(ENROLID,
+# 		BIRTH_YEAR=year(BIRTH_DATE), 
+# 		NRX=ifelse(is.na(ID),0,1))][
+# 	,.(BIRTH_YEAR=first(BIRTH_YEAR), NRX=sum(NRX)), by=.(ENROLID)] %>%
+# 	as_tibble() %>%
+# 	arrange(BIRTH_YEAR, NRX) %>% 
+# 	group_by(BIRTH_YEAR) %>% 
+# 	mutate(RANK=1:n(), PRANK=RANK/max(RANK), CUMRX=cumsum(NRX), PCUMRX=CUMRX/max(CUMRX))
+
+# fig_ginicoef <- ginicoef_df %>% 
+# 	ggplot(aes(x=PRANK, y=PCUMRX, col=factor(BIRTH_YEAR))) + 
+# 		geom_line() + 
+# 		scale_x_continuous(breaks=seq(from=0, to=1, by=0.2), minor_breaks=seq(from=0, to=1, by=0.1)) + 
+# 		scale_y_continuous(breaks=seq(from=0, to=1, by=0.2), minor_breaks=seq(from=0, to=1, by=0.1)) + 
+# 		theme_minimal() + 
+# 		labs(x="Cumulative share of children, ranked by\ntotal antibiotics received (lowest to highest)", y="Cumulative share of all antibiotics prescribed", col="Birth year") + 
+# 		geom_segment(x=0, y=0, xend=1, yend=1, lty="dashed", col="black")
+
+# ggsave(fig_ginicoef, file="figures/under5/ginicoef.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Prescriptions by PCV status
+# =============================================================================
+
+pcvcohorts <- vax_df[CODE%in%c("90669","90670")][
+ 	# Mark PCV doses with an indicator:
+	,.(ENROLID,DATE,CODE,
+		PCV7=if_else(CODE=="90669",1,0),
+		PCV13=if_else(CODE=="90670",1,0))][
+	# Count PCV doses per person: 
+	,.(N_PCV7=sum(PCV7),N_PCV13=sum(PCV13)), by=.(ENROLID)][
+	# Link with the membership data frame: 
+	memb_df[NDAYS==1800,], on=.(ENROLID)][
+	is.na(get("N_PCV7")), ("N_PCV7"):=0][
+	is.na(get("N_PCV13")), ("N_PCV13"):=0][
+	# Indicate 'full' courses of PCV7/13, or no PCV
+	,.(ENROLID, STATE, SEX, BIRTH_MONTH=month(BIRTH_DATE), 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		BIRTH_DATE=BIRTH_DATE,
+		PCV7COHORT=if_else(N_PCV7>=3 & N_PCV13==0, 1, 0),
+		PCV13COHORT=if_else(N_PCV7==0 & N_PCV13>=3, 1, 0),
+		NOPCVCOHORT=if_else(N_PCV7==0 & N_PCV13==0, 1, 0))][
+	BIRTH_YEAR>=2008 & BIRTH_YEAR<=2012][
+	PCV7COHORT==1, PCVCOHORT:="7"][
+	PCV13COHORT==1, PCVCOHORT:="13"][
+	NOPCVCOHORT==1, PCVCOHORT:="None"][
+	is.na(PCVCOHORT), PCVCOHORT:="Other"]
+	#[
+	#PCV7COHORT==1 | PCV13COHORT==1 | NOPCVCOHORT==1]
+
+pcvcohorts <- rx_df[CODE %in% antibiotics$NDCNUM][
+	pcvcohorts, on=.(ENROLID)][
+	,NRX:=if_else(is.na(CODE),0,1)][
+	,.(STATE=first(STATE), SEX=first(SEX), BIRTH_DATE=first(BIRTH_DATE), BIRTH_MONTH=first(BIRTH_MONTH), BIRTH_YEAR=first(BIRTH_YEAR), PCV7COHORT=first(PCV7COHORT), PCV13COHORT=first(PCV13COHORT), NOPCVCOHORT=first(NOPCVCOHORT), PCVCOHORT=first(PCVCOHORT), NRX=sum(NRX)),by=.(ENROLID)]
+
+fig_pcvrx_birthyear <- pcvcohorts %>% 
+	as_tibble() %>% 
+	filter(PCV7COHORT==1 | PCV13COHORT==1 | NOPCVCOHORT==1) %>% 
+	group_by(PCVCOHORT, BIRTH_YEAR) %>% 
+	summarise(NRX=sum(NRX), NMEMB=n()) %>% 
+	ungroup() %>% 
+	mutate(PCVCOHORT=factor(PCVCOHORT, levels=c("7","13","None"))) %>% 
+	ungroup() %>% 
+	select(PCVCOHORT, BIRTH_YEAR, NRX, NMEMB) %>% 
+	mutate(RXPP=NRX/NMEMB) %>% 
+	filter(!(PCVCOHORT=="13"&BIRTH_YEAR<2010)) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=RXPP, col=PCVCOHORT)) + 
+		geom_point() + 
+		geom_line() + 
+		theme_minimal() + 
+		expand_limits(y=0) + 
+		scale_x_continuous(breaks=2008:2012) + 
+		scale_color_manual(values=c("None"="black","7"="red","13"="blue"), labels=c("None"="None","7"="PCV7","13"="PCV13")) + 
+		labs(x="Birth year", y="Prescriptions per person by age 5", col="PCV received")
+ggsave(fig_pcvrx_birthyear, file="figures/under5/pcvrx_birthyear.pdf",width=8,height=5)
+
+fig_pcvrx_birthmonth <- pcvcohorts %>% 
+	as_tibble() %>% 
+	filter(PCV7COHORT==1 | PCV13COHORT==1 | NOPCVCOHORT==1) %>% 
+	group_by(PCVCOHORT, BIRTH_YEAR, BIRTH_MONTH) %>%
+	summarise(NRX=sum(NRX), NMEMB=n()) %>% 
+	ungroup() %>% 
+	mutate(PCVCOHORT=factor(PCVCOHORT, levels=c("7","13","None"))) %>% 
+	ungroup() %>% 
+	select(PCVCOHORT, BIRTH_YEAR, BIRTH_MONTH, NRX, NMEMB) %>% 
+	mutate(RXPP=NRX/NMEMB) %>% 
+	filter(!(PCVCOHORT=="13"&BIRTH_YEAR<2010)) %>% 
+	mutate(DATE=ymd(paste0(BIRTH_YEAR,"/",BIRTH_MONTH,",","1"))) %>% 
+	ggplot(aes(x=DATE, y=RXPP, col=PCVCOHORT)) + 
+		geom_point() + 
+		geom_line(alpha=0.2) + 
+		geom_line(stat="smooth", method="loess", span=0.8) + 
+		theme_minimal() + 
+		expand_limits(y=0) + 
+		scale_x_date(breaks="1 year", labels=date_format("%Y")) + 
+		scale_color_manual(values=c("None"="black","7"="red","13"="blue"), labels=c("None"="None","7"="PCV7","13"="PCV13")) + 
+		labs(x="Birth month", y="Prescriptions per person by age 5", col="PCV received")
+ggsave(fig_pcvrx_birthmonth, file="figures/under5/pcvrx_birthmonth.pdf",width=8,height=5)
+
+
+
+# Plotting at the individual level: 
+# fig_pcvrx_indiv <- pcvcohorts %>% 
+# 	as_tibble() %>% 
+# 	mutate(PCVCOHORT=case_when(PCV7COHORT==1~"7",PCV13COHORT==1~"13",NOPCVCOHORT==1~"None")) %>% 
+# 	ggplot(aes(x=BIRTH_DATE, y=NRX, col=PCVCOHORT)) + 
+# 			geom_point(alpha=0.1) + 
+# 			geom_smooth(method="loess", span=0.2)  +
+# 			theme_minimal() + 
+# 			coord_cartesian(ylim=c(0,10))
+# ggsave(fig_pcvrx_indiv, file="figures/under5/pcvrx_indiv.pdf",width=8,height=5)
+
+
+pcv_cohort_sizes <- pcvcohorts[,.(NMEMB=.N),by=.(BIRTH_YEAR, PCVCOHORT)]
+
+# Look at otitis media by PCV status: 
+
+fig_cumvisit_vax_om <- make_cumvisit_vax_fig("Otitis media")
+fig_cumvisit_vax_sinusitis <- make_cumvisit_vax_fig("Sinusitis")
+fig_cumvisit_vax_pneumonia <- make_cumvisit_vax_fig("Pneumonia")
+fig_cumvisit_vax_strepphar <- make_cumvisit_vax_fig("Strep pharyngitis")
+fig_cumvisit_vax_uri <- make_cumvisit_vax_fig("URI (other)")
+
+ggsave(fig_cumvisit_vax_om, file="figures/under5/cumvisit_vax_om.pdf",width=8,height=5)
+ggsave(fig_cumvisit_vax_sinusitis, file="figures/under5/cumvisit_vax_sinusitis.pdf",width=8,height=5)
+ggsave(fig_cumvisit_vax_pneumonia, file="figures/under5/cumvisit_vax_pneumonia.pdf",width=8,height=5)
+ggsave(fig_cumvisit_vax_strepphar, file="figures/under5/cumvisit_vax_strepphar.pdf",width=8,height=5)
+ggsave(fig_cumvisit_vax_uri, file="figures/under5/cumvisit_vax_uri.pdf",width=8,height=5)
+
+# =============================================================================
+# Disease vs Stewardship
+# =============================================================================
+
+nrx_df <- visit_df[
+	(rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Get only new prescriptions, not refills: 
+	REFILL==0][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(BIRTH_YEAR=year(BIRTH_DATE), ASSOC_VISIT_ID)][
+	# Keep only birth years in 2008-2012:
+	BIRTH_YEAR %in% 2008:2012]),
+	# Left join on visit_df (way back at the beginning):
+	,on=.(ID=ASSOC_VISIT_ID)][
+	# Extract useful columns: 
+	,.(BIRTH_YEAR,COND,ID)][
+	# Assign condition "unlinked" to unlinked prescriptions: 
+	is.na(ID),COND:="Unlinked"][
+	# Assign NA conditions as "Other": 
+	is.na(COND),COND:="Other"][
+	# Count prescriptions by birth year and condition: 
+	,.(NRX=.N),by=.(BIRTH_YEAR, COND)] %>% 
+	# Convert to tibble and sort: 
+	as_tibble() %>% 
+	arrange(BIRTH_YEAR, desc(NRX))
+
+
+nvisit_df <- visit_df[
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(BIRTH_YEAR=year(BIRTH_DATE), COND)][
+	# Keep only birth years in 2008-2012:
+	BIRTH_YEAR %in% 2008:2012][
+	# Assign NA conditions as "Other": 
+	is.na(COND),COND:="Other"][
+	# Count visits by birth year and condition
+	,.(NVISITS=.N),by=.(BIRTH_YEAR, COND)] %>% 
+	# Convert to tibble and sort: 
+	as_tibble() %>% 
+	arrange(BIRTH_YEAR, desc(NVISITS))
+
+
+rv_df <- nrx_df %>% 
+	inner_join(nvisit_df, by=c("BIRTH_YEAR","COND")) %>% 
+	left_join(cohort_sizes, by="BIRTH_YEAR") %>%
+	mutate(v=NVISITS/NMEMB, r=NRX/NVISITS)
+
+
+disease_stewardship_table <- rv_df %>% 
+	select(BIRTH_YEAR, COND, v, r) %>% 
+	mutate(reference=case_when(BIRTH_YEAR==2008~1,TRUE~0)) %>% 
+	split(.$reference) %>% 
+	map(~ select(.,-reference)) %>% 
+	(function(lst){left_join(lst[[1]],lst[[2]],by=c("COND"),suffix=c("","08"))}) %>%
+	select(-BIRTH_YEAR08) %>% 
+	mutate(stewardship= v08*r - v08*r08 ) %>% 
+	mutate(disease= v*r08 - v08*r08) %>% 
+	mutate(residual= v*r + v08*r08 - v08*r - v*r08) %>% 
+	select(BIRTH_YEAR, COND, stewardship, disease, residual) %>% 
+	pivot_longer(c("stewardship","disease","residual"), names_to="factor", values_to="deltaRx") %>% 
+	arrange(BIRTH_YEAR, deltaRx) %>% 
+	pivot_wider(names_from=BIRTH_YEAR, values_from=deltaRx) %>% 
+	arrange(`2012`)
+
+write_csv(disease_stewardship_table, path="figures/under5/disease_stewardship_table.csv")
+
+
+fig_key_visits <- rv_df %>% 
+	filter(COND %in% c("Otitis media","Sinusitis","Other","URI (other)")) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=v, col=COND)) + 
+		geom_point() + 
+		geom_line()  + 
+		theme_minimal() + 
+		expand_limits(y=0) + 
+		labs(x="Birth year", y="Number of visits by age 5 for key conditions")
+ggsave(fig_key_visits, file="figures/under5/key_visits.pdf",width=8,height=5)
+
+fig_key_prescribingpervisit <- rv_df %>% 
+	filter(COND %in% c("Otitis media","Sinusitis","Other","URI (other)")) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=r, col=COND)) + 
+		geom_point() + 
+		geom_line() + 
+		theme_minimal() + 
+		expand_limits(y=0) + 
+		labs(x="Birth year", y="Per-visit prescribing for key conditions")
+ggsave(fig_key_prescribingpervisit, file="figures/under5/key_prescribingpervisit.pdf",width=8,height=5)
+
+fig_unlinked <- nrx_df %>% 
+	filter(COND == "Unlinked") %>% 
+	left_join(cohort_sizes, by="BIRTH_YEAR") %>% 
+	mutate(rxpp=NRX/NMEMB) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=rxpp)) + 
+		geom_point() + 
+		geom_line() + 
+		expand_limits(y=0) + 
+		theme_minimal() + 
+		labs(x="Birth year", y="Unlinked prescriptions per person by age 5")
+ggsave(fig_unlinked, file="figures/under5/unlinked.pdf",width=8,height=5)
+
+#####
+
+# Store NDCs for key drug classes ---------------------------------------------
+antibiotics <- redbook %>% 
+	filter(grepl('Antibiot',THRCLDS))
+
+adrenals <- redbook %>% 
+	filter(grepl('Adrenals & Comb',THRCLDS))
+	# filter(grepl('Sympathomimetic Agents',THRCLDS))
+
+setDT(antibiotics)
+setDT(adrenals)
+
+# Set run parameters ----------------------------------------------------------
+alphasig <- 0.05 # for 95% CIs 
+
+cohort_sizes <- memb_df[,.(ENROLID, BIRTH_YEAR=year(BIRTH_DATE))][
+	,.(NMEMB=.N),by=.(BIRTH_YEAR)]
+
+cohort_sizes_state <- memb_df[,.(ENROLID, BIRTH_YEAR=year(BIRTH_DATE), STATE)][
+	,.(NMEMB=.N),by=.(BIRTH_YEAR, STATE)]
+
+load("data/state_boundaries.RData") 
+
+HHS_boundaries_lwr48 <- state_boundaries %>% 
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(geometry=st_union(geometry))
+
+
+# =============================================================================
+# Membership summary
+# =============================================================================
+
+memb_df %>% 
+	filter(NDAYS==1800) %>% 
+	as_tibble() %>% 
+	makeHHS() %>% 
+	group_by(HHS) %>% 
+	summarise(N=n()) %>% 
+	ungroup() %>% 
+	mutate(PCT=round(N/sum(N)*100,1)) %>% 
+	left_join(HHSnames, by="HHS")
+
+#      HHS     N   PCT HHSname
+#    <dbl> <int> <dbl> <chr>
+#  1     1 11557   5.9 Boston
+#  2     2 18190   9.2 New York
+#  3     3 11930   6.1 Philadelphia
+#  4     4 50796  25.8 Atlanta
+#  5     5 44852  22.8 Chicago
+#  6     6 24230  12.3 Dallas
+#  7     7 11212   5.7 Kansas City
+#  8     8  5569   2.8 Denver
+#  9     9 10625   5.4 San Francisco
+# 10    10  7989   4.1 Seattle
+
+memb_df %>% 
+	filter(NDAYS==1800) %>% 
+	as_tibble() %>% 
+	group_by(SEX) %>% 
+	summarise(N=n()) %>% 
+	ungroup() %>% 
+	mutate(PCT=round(N/sum(N)*100,1))
+
+#   SEX        N   PCT
+#   <chr>  <int> <dbl>
+# 1 1     101315  51.4
+# 2 2      95635  48.6
+
+memb_df %>% 
+	filter(NDAYS==1800) %>% 
+	as_tibble() %>% 
+	mutate(BIRTH_YEAR=year(BIRTH_DATE)) %>% 
+	group_by(BIRTH_YEAR) %>% 
+	summarise(N=n()) %>% 
+	ungroup() %>% 
+	mutate(PCT=round(N/sum(N)*100,1))
+
+#   BIRTH_YEAR     N   PCT
+#        <int> <int> <dbl>
+# 1       2008 40762  20.7
+# 2       2009 42778  21.7
+# 3       2010 38378  19.5
+# 4       2011 40439  20.5
+# 5       2012 34593  17.6
+
+
+
+
+
+# =============================================================================
+# Some causal(?) analysis: 
+# =============================================================================
+
+# source('code/analyze_under5_causal.R')
+
+# =============================================================================
+# Poisson regression
+# =============================================================================
+
+# source('code/analyze_under5_regression.R')
+
+# =============================================================================
+# Table of the most frequent conditions
+# =============================================================================
+
+visit_summary <- visit_df[,.(NVISITS=.N),by=.(COND)][
+	,.(COND,NVISITS,PCTVISITS=NVISITS/sum(NVISITS)*100)] %>%
+	as_tibble() %>%
+	arrange(desc(PCTVISITS))
+
+# > visit_summary
+# # A tibble: 11 x 3
+#    COND                        NVISITS PCTVISITS
+#    <fct>                         <int>     <dbl>
+#  1 NA                          9223526    72.9	// This is 'other'
+#  2 URI (other)                 1552158    12.3
+#  3 Otitis media                1262998     9.98
+#  4 Bronchitis (acute)           189402     1.50
+#  5 Asthma                       118358     0.935
+#  6 SSTI                          85393     0.675
+#  7 Pneumonia                     74699     0.590
+#  8 Intestinal infection          54020     0.427
+#  9 UTI                           47989     0.379
+# 10 Influenza                     34824     0.275
+# 11 Bacterial infection (other)   13657     0.108
+
+visit_change <- visit_df[memb_df, on=.(ENROLID), nomatch=0][
+	,.(ENROLID, BIRTH_YEAR=year(BIRTH_DATE), COND)][
+	,.(NVISITS=.N),by=.(COND, BIRTH_YEAR)] %>% 
+	as_tibble() %>% 
+	pivot_wider(names_from="BIRTH_YEAR", values_from="NVISITS") %>% 
+	mutate(PCTCHANGE=round((`2012` - `2008`)/`2008`*100, 1)) %>%
+	select(COND, `2008`, `2012`, PCTCHANGE) %>% 
+	arrange(PCTCHANGE)
+
+# > visit_change
+# A tibble: 14 x 4
+#    COND                         `2008`  `2012` PCTCHANGE
+#    <fct>                         <int>   <int>     <dbl>
+#  1 UTI                            8763    5259     -40
+#  2 Asthma                        21549   13843     -35.8
+#  3 Sinusitis                     34252   23084     -32.6
+#  4 Bronchitis (acute)            29640   20143     -32
+#  5 Otitis media                 195275  136827     -29.9
+#  6 Pneumonia                     12373    8836     -28.6
+#  7 Viral infection               48288   36550     -24.3
+#  8 Intestinal infection           7648    6033     -21.1
+#  9 URI (other)                  183681  146887     -20
+# 10 Influenza                      5605    4594     -18
+# 11 SSTI                          11927   10207     -14.4
+# 12 NA                          1209747 1057960     -12.5
+# 13 Strep pharyngitis             17743   15709     -11.5
+# 14 Bacterial infection (other)    1503    1831      21.8
+
+# =============================================================================
+# Histogram of birth dates by month
+# =============================================================================
+
+membbymonth <- memb_df[,.(BIRTH_YEAR=year(BIRTH_DATE),BIRTH_MONTH=month(BIRTH_DATE))][,.(NMEMB=.N),by=.(BIRTH_YEAR, BIRTH_MONTH)][
+	,.(YEARFRAC=BIRTH_YEAR+(BIRTH_MONTH-1)/12, NMEMB)] %>% 
+	as_tibble() %>% 
+	arrange(YEARFRAC) %>% 
+	mutate(LABS=case_when(YEARFRAC %in% 2008:2016~as.character(YEARFRAC),TRUE~""))
+
+fig_membbymonth <- membbymonth %>% 
+	ggplot(aes(x=factor(YEARFRAC), y=NMEMB)) + 
+		geom_col(fill="gray") + 
+		# scale_x_discrete(labels=temp$LABS) + 
+		theme_minimal() + 
+		labs(x="Birth month", y="Number of people")
+ggsave(fig_membbymonth, file="figures/under5/membbymonth.pdf",width=8,height=5)
+
+# =============================================================================
+# Cumulative prescriptions over time 
+# =============================================================================
+
+# abx cumulatve: ------------------------------------------------------------- 
+rx_df_abx <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumrx_df_abx <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumrx_df_abx <- rbind(cumrx_df_abx,
+		rx_df_abx[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumrx_df_abx <- cumrx_df_abx[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+cumrx_df_abx[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+cumrx_df_abx[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+cumrx_df_abx[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+cumrx_df_abx[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+cumrx_df_abx <- as_tibble(cumrx_df_abx)
+fig_cumrx_abx <- cumrx_df_abx %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative antibiotic prescriptions", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumrx_abx, file="figures/under5/cumrx_abx.pdf",width=8,height=5)
+
+# adr cumulatve: ------------------------------------------------------------- 
+rx_df_adr <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out adr prescriptions:
+	adrenals[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumrx_df_adr <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumrx_df_adr <- rbind(cumrx_df_adr,
+		rx_df_adr[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumrx_df_adr <- cumrx_df_adr[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+cumrx_df_adr[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+cumrx_df_adr[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+cumrx_df_adr[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+cumrx_df_adr[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+cumrx_df_adr <- as_tibble(cumrx_df_adr)
+fig_cumrx_adr <- cumrx_df_adr %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative adrenals prescriptions", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumrx_adr, file="figures/under5/cumrx_adr.pdf",width=8,height=5)
+
+# combined: -------------------------------------------------------------------
+
+fig_cumrx_combined <- bind_rows(
+	mutate(cumrx_df_abx, CLASS="Antibiotic"),
+	mutate(cumrx_df_adr, CLASS="Adrenal")
+	) %>% 
+	mutate(CLASS=factor(CLASS, levels=c("Antibiotic","Adrenal"))) %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR), fill=factor(BIRTH_YEAR), lty=CLASS)) + 
+		geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.4, col=NA) + 
+		geom_line(stat="smooth", method="loess", span=0.2) + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative prescriptions per person", col="Birth Year", fill="Birth Year", lty="Drug Class") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 	
+ggsave(fig_cumrx_combined, file="figures/under5/cumrx_combined.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Cumulative visits over time by condition:
+# =============================================================================
+
+fig_cumvisit_asthma <- make_cumvisit_fig("Asthma")
+fig_cumvisit_bactinf <- make_cumvisit_fig("Bacterial infection (other)")
+fig_cumvisit_bronch <- make_cumvisit_fig("Bronchitis (acute)")
+fig_cumvisit_flu <- make_cumvisit_fig("Influenza")
+fig_cumvisit_giinf <- make_cumvisit_fig("Intestinal infection")
+fig_cumvisit_om <- make_cumvisit_fig("Otitis media")
+fig_cumvisit_pneumonia <- make_cumvisit_fig("Pneumonia")
+fig_cumvisit_sinusitis <- make_cumvisit_fig("Sinusitis")
+fig_cumvisit_ssti <- make_cumvisit_fig("SSTI")
+fig_cumvisit_strepphar <- make_cumvisit_fig("Strep pharyngitis")
+fig_cumvisit_uri <- make_cumvisit_fig("URI (other)")
+fig_cumvisit_uti <- make_cumvisit_fig("UTI")
+fig_cumvisit_viralinf <- make_cumvisit_fig("Viral infection")
+fig_cumvisit_other <- make_cumvisit_fig(NA)
+
+ggsave(fig_cumvisit_asthma, file="figures/under5/cumvisit_asthma.pdf", width=8, height=5)
+ggsave(fig_cumvisit_bactinf, file="figures/under5/cumvisit_bactinf.pdf", width=8, height=5)
+ggsave(fig_cumvisit_bronch, file="figures/under5/cumvisit_bronch.pdf", width=8, height=5)
+ggsave(fig_cumvisit_flu, file="figures/under5/cumvisit_flu.pdf", width=8, height=5)
+ggsave(fig_cumvisit_giinf, file="figures/under5/cumvisit_giinf.pdf", width=8, height=5)
+ggsave(fig_cumvisit_om, file="figures/under5/cumvisit_om.pdf", width=8, height=5)
+ggsave(fig_cumvisit_pneumonia, file="figures/under5/cumvisit_pneumonia.pdf", width=8, height=5)
+ggsave(fig_cumvisit_sinusitis, file="figures/under5/cumvisit_sinusitis.pdf", width=8, height=5)
+ggsave(fig_cumvisit_ssti, file="figures/under5/cumvisit_ssti.pdf", width=8, height=5)
+ggsave(fig_cumvisit_strepphar, file="figures/under5/cumvisit_strepphar.pdf", width=8, height=5)
+ggsave(fig_cumvisit_uri, file="figures/under5/cumvisit_uri.pdf", width=8, height=5)
+ggsave(fig_cumvisit_uti, file="figures/under5/cumvisit_uti.pdf", width=8, height=5)
+ggsave(fig_cumvisit_viralinf, file="figures/under5/cumvisit_viralinf.pdf", width=8, height=5)
+ggsave(fig_cumvisit_other, file="figures/under5/cumvisit_other.pdf", width=8, height=5)
+
+# =============================================================================
+# Prescription probabilities by condition: 
+# =============================================================================
+
+prx_df <- rx_df[REFILL==0,.(CODE, ASSOC_VISIT_ID, RX_ID=ID)][
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	visit_df, on=.(ASSOC_VISIT_ID=ID)][
+	is.na(RX_ID),NRX:=0][
+	!is.na(RX_ID),NRX:=1][
+	memb_df[,.(ENROLID,BIRTH_YEAR=year(BIRTH_DATE))],on=.(ENROLID),nomatch=0][
+	,.(NVISITS=.N, NRX=sum(NRX)), by=.(BIRTH_YEAR,COND)][
+	] %>% 
+	as_tibble() %>% 
+	mutate(PRX=NRX/NVISITS) %>% 
+	arrange(BIRTH_YEAR, desc(PRX))
+
+fig_prx_trend <- prx_df %>% 
+	filter(BIRTH_YEAR <= 2014) %>% 
+	filter(PRX>0.2) %>% 
+	filter(COND!="Bacterial infection (other)") %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=PRX, col=COND)) + 
+		geom_point() + 
+		geom_line()  + 
+		theme_minimal() +
+		scale_y_continuous(limits=c(0,1)) + 
+		scale_color_brewer(type="qual") + 
+		labs(x="Birth year", y="Antibiotic prescriptions per visit", col="Condition")
+ggsave(fig_prx_trend, file="figures/under5/prx_trend.pdf", width=8, height=5)
+
+# =============================================================================
+# Time to first antibiotic 
+# =============================================================================
+
+# abx -------------------------------------------------------------------------
+first_rx_df_abx <- rx_df_abx[,.(BIRTH_YEAR=first(BIRTH_YEAR), AGE_DAYS=min(AGE_DAYS)), by=.(ENROLID)]
+
+first_cumrx_df_abx <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	first_cumrx_df_abx <- rbind(first_cumrx_df_abx,
+		first_rx_df_abx[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+first_cumrx_df_abx <- first_cumrx_df_abx[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+first_cumrx_df_abx[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+first_cumrx_df_abx[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+first_cumrx_df_abx[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+first_cumrx_df_abx[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+first_cumrx_df_abx <- as_tibble(first_cumrx_df_abx)
+fig_first_cumrx_abx <- first_cumrx_df_abx %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Proportion who have received an antibiotic prescription", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+
+# adr -------------------------------------------------------------------------
+
+first_rx_df_adr <- rx_df_adr[,.(BIRTH_YEAR=first(BIRTH_YEAR), AGE_DAYS=min(AGE_DAYS)), by=.(ENROLID)]
+
+first_cumrx_df_adr <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	first_cumrx_df_adr <- rbind(first_cumrx_df_adr,
+		first_rx_df_adr[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+first_cumrx_df_adr <- first_cumrx_df_adr[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+first_cumrx_df_adr[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+first_cumrx_df_adr[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+first_cumrx_df_adr[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+first_cumrx_df_adr[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+first_cumrx_df_adr <- as_tibble(first_cumrx_df_adr)
+fig_first_cumrx_adr <- first_cumrx_df_adr %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Proportion who have received an adrenal prescription", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+
+# combined --------------------------------------------------------------------
+fig_first_cumrx_combined <- bind_rows(
+	mutate(first_cumrx_df_abx, CLASS="Antibiotic"),
+	mutate(first_cumrx_df_adr, CLASS="Adrenal")
+	) %>% 
+	mutate(CLASS=factor(CLASS, levels=c("Antibiotic","Adrenal"))) %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR), fill=factor(BIRTH_YEAR), lty=CLASS)) + 
+		# geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.4, col=NA) + 
+		geom_line(stat="smooth", method="loess", span=0.2) + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		scale_y_continuous(limits=c(0,1)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Proportion who have received a prescription", col="Birth Year", fill="Birth Year", lty="Drug Class") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+ggsave(fig_first_cumrx_combined, file="figures/under5/first_cumrx_combined.pdf",width=8,height=5)
+
+# =============================================================================
+# Cumulative prescriptions by HHS region
+# =============================================================================
+
+# Cumulative prescriptions
+totrx_df_abx_state <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE)][
+	,.(NRX=.N),by=.(STATE)][
+	memb_df[,.(NMEMB=.N),by=STATE],nomatch=0,on=.(STATE)]
+
+
+fig_totrx_abx_map_HHS <- totrx_df_abx_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=NRX/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean prescriptions per person\nby age 5")
+ggsave(fig_totrx_abx_map_HHS, file="figures/under5/totrx_abx_map_HHS.pdf",width=8,height=5)
+
+fig_totrx_abx_map_state <- totrx_df_abx_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	group_by(STATE) %>%
+	summarise(NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+	left_join(state_boundaries) %>%
+	ggplot(aes(fill=NRX/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean prescriptions per person\nby age 5")
+ggsave(fig_totrx_abx_map_state, file="figures/under5/totrx_abx_map_state.pdf",width=8,height=5)
+
+# =============================================================================
+# visits most frequently associated with (initial) prescriptions
+# =============================================================================
+
+rx_visit_map <- rx_df[REFILL==0][
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		ASSOC_VISIT_ID)]
+
+rx_visit_map <- visit_df[,.(COND,ID)][
+	rx_visit_map,on=c(ID="ASSOC_VISIT_ID")]
+
+linked_rx_summary <- rx_visit_map[,UNLINKED:=if_else(is.na(ID),1,0)][
+	,.(NRX=.N),by=.(COND,UNLINKED,BIRTH_YEAR)] %>%
+	as_tibble() %>%
+	mutate(COND=as.character(COND)) %>%
+	mutate(COND=case_when(UNLINKED==1~"Unlinked",TRUE~COND)) %>%
+	mutate(COND=case_when(is.na(COND)~"Other",TRUE~COND)) %>%
+	select(-UNLINKED) %>%
+	arrange(BIRTH_YEAR,desc(NRX)) %>%
+	group_by(BIRTH_YEAR) %>%
+	mutate(PCTRX=NRX/sum(NRX)*100)
+
+linked_rx_summary %>% 
+	select(COND,BIRTH_YEAR,PCTRX) %>%
+	pivot_wider(names_from=BIRTH_YEAR, values_from=PCTRX)
+
+# COND     `2008`  `2009`  `2010`  `2011`  `2012`  `2013`  `2014` `2015` `2016`
+# <chr>     <dbl>   <dbl>   <dbl>   <dbl>   <dbl>   <dbl>   <dbl>  <dbl>  <dbl>
+# Otitis… 34.3    34.3    34.2    34.3    34.6    36.0    38.7    41.7   39.0
+# Other   26.4    27.0    27.8    29.5    30.9    32.3    33.5    34.3   36.3
+# URI (o… 21.3    21.3    21.0    19.4    17.9    15.9    12.8     9.98  13.7
+# Unlink…  8.35    8.02    7.72    7.51    7.30    6.93    6.65    6.17   3.42
+# Bronch…  3.69    3.55    3.40    3.31    3.12    3.04    3.07    3.19   2.74
+# SSTI     1.89    1.95    2.05    2.15    2.32    2.30    2.17    2.00   1.37
+# Pneumo…  1.77    1.71    1.65    1.64    1.71    1.60    1.43    1.22  NA
+# Asthma   1.14    1.04    1.05    0.921   0.826   0.695   0.599   0.460 NA
+# UTI      0.520   0.502   0.499   0.541   0.516   0.504   0.422   0.345  1.37
+# Bacter…  0.261   0.262   0.276   0.327   0.377   0.388   0.355   0.257  1.37
+# Influe…  0.241   0.239   0.254   0.255   0.266   0.259   0.203   0.183  0.685
+# Intest…  0.0903  0.0934  0.0836  0.0923  0.0812  0.0894  0.0924  0.128 NA
+
+# Which diagnoses are the most common in 'other'? 
+# visit_df[,.(COND,ID,DX)][rx_df[
+# 	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+# 	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+# 	# Inner-join to on 'memb_df' to grab demographic information:
+# 	memb_df,nomatch=0,on=.(ENROLID)][
+# 	# Extract ENROLID, birth year, and age (in days) for each rx:
+# 	,.(ENROLID, 
+# 		BIRTH_YEAR=year(BIRTH_DATE), 
+# 		ASSOC_VISIT_ID)], on=c(ID="ASSOC_VISIT_ID")][
+# 	(!is.na(ID)) & (is.na(COND))][
+# 	,.(NVISITS=.N),by=.(DX)] %>%
+# 	as_tibble() %>%
+# 	arrange(desc(NVISITS)) %>%
+# 	mutate(POTHER=NVISITS/sum(NVISITS)) %>%
+# 	print(n=15)
+
+# =============================================================================
+# PCV uptake over time 
+# =============================================================================
+
+vax_df_pcv <- vax_df[CODE %in% c("90669", "90670")][
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvax_df_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvax_df_pcv <- rbind(cumvax_df_pcv,
+		vax_df_pcv[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumvax_df_pcv <- cumvax_df_pcv[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+cumvax_df_pcv[BIRTH_YEAR==2013 & AGE_DAYS_ROUNDED>(30*12*4), NRX:=NA_integer_]
+cumvax_df_pcv[BIRTH_YEAR==2014 & AGE_DAYS_ROUNDED>(30*12*3), NRX:=NA_integer_]
+cumvax_df_pcv[BIRTH_YEAR==2015 & AGE_DAYS_ROUNDED>(30*12*2), NRX:=NA_integer_]
+cumvax_df_pcv[BIRTH_YEAR==2016 & AGE_DAYS_ROUNDED>(30*12*1), NRX:=NA_integer_]
+
+cumvax_df_pcv <- as_tibble(cumvax_df_pcv)
+fig_cumvax_pcv <- cumvax_df_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative PCV vaccinations", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumvax_pcv, file="figures/under5/cumvax_pcv.pdf",width=8,height=5)
+
+
+# The switch over time: -------------------------------------------------------
+fig_pcvuptake <- vax_df[CODE%in%c("90669","90670")][
+	DATE<ymd("2014-01-01")][
+	,.(IS_PCV7=if_else(CODE=="90669",1,0),
+		DT_MONTH=month(DATE), 
+		DT_YEAR=year(DATE))][
+	,.(PROP_PCV7=sum(IS_PCV7)/.N),by=.(DT_MONTH,DT_YEAR)] %>%
+	as_tibble() %>%
+	arrange(DT_YEAR, DT_MONTH) %>%
+	mutate(DATE=ymd(paste0(DT_YEAR,"-",DT_MONTH,"-","01"))) %>%
+	mutate(PROP_PCV13=1-PROP_PCV7) %>% 
+	select(DATE, PROP_PCV7, PROP_PCV13) %>% 
+	pivot_longer(c("PROP_PCV7","PROP_PCV13")) %>%
+	mutate(name=factor(name, levels=c("PROP_PCV7","PROP_PCV13"))) %>% 
+	ggplot(aes(x=DATE, y=value, col=name)) + 
+		geom_point() + 
+		geom_line() + 
+		scale_color_manual(labels=c("PROP_PCV7"="PCV7","PROP_PCV13"="PCV13"), values=c("PROP_PCV7"="red","PROP_PCV13"="blue")) +  
+		labs(x="Month", y="Proportion of pneumococcal vaccines") + 
+		theme_minimal() + 
+		theme(legend.title=element_blank())
+ggsave(fig_pcvuptake, file="figures/under5/pcvuptake.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Gini coefficient
+# =============================================================================
+
+# # abx cumulatve: ------------------------------------------------------------- 
+# ginicoef_df <- rx_df[
+# 	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+# 	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+# 	# Inner-join to on 'memb_df' to grab demographic information:
+# 	memb_df,on=.(ENROLID)][
+# 	,.(ENROLID,
+# 		BIRTH_YEAR=year(BIRTH_DATE), 
+# 		NRX=ifelse(is.na(ID),0,1))][
+# 	,.(BIRTH_YEAR=first(BIRTH_YEAR), NRX=sum(NRX)), by=.(ENROLID)] %>%
+# 	as_tibble() %>%
+# 	arrange(BIRTH_YEAR, NRX) %>% 
+# 	group_by(BIRTH_YEAR) %>% 
+# 	mutate(RANK=1:n(), PRANK=RANK/max(RANK), CUMRX=cumsum(NRX), PCUMRX=CUMRX/max(CUMRX))
+
+# fig_ginicoef <- ginicoef_df %>% 
+# 	ggplot(aes(x=PRANK, y=PCUMRX, col=factor(BIRTH_YEAR))) + 
+# 		geom_line() + 
+# 		scale_x_continuous(breaks=seq(from=0, to=1, by=0.2), minor_breaks=seq(from=0, to=1, by=0.1)) + 
+# 		scale_y_continuous(breaks=seq(from=0, to=1, by=0.2), minor_breaks=seq(from=0, to=1, by=0.1)) + 
+# 		theme_minimal() + 
+# 		labs(x="Cumulative share of children, ranked by\ntotal antibiotics received (lowest to highest)", y="Cumulative share of all antibiotics prescribed", col="Birth year") + 
+# 		geom_segment(x=0, y=0, xend=1, yend=1, lty="dashed", col="black")
+
+# ggsave(fig_ginicoef, file="figures/under5/ginicoef.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Prescriptions by PCV status
+# =============================================================================
+
+pcvcohorts <- vax_df[CODE%in%c("90669","90670")][
+ 	# Mark PCV doses with an indicator:
+	,.(ENROLID,DATE,CODE,
+		PCV7=if_else(CODE=="90669",1,0),
+		PCV13=if_else(CODE=="90670",1,0))][
+	# Count PCV doses per person: 
+	,.(N_PCV7=sum(PCV7),N_PCV13=sum(PCV13)), by=.(ENROLID)][
+	# Link with the membership data frame: 
+	memb_df[NDAYS==1800,], on=.(ENROLID)][
+	is.na(get("N_PCV7")), ("N_PCV7"):=0][
+	is.na(get("N_PCV13")), ("N_PCV13"):=0][
+	# Indicate 'full' courses of PCV7/13, or no PCV
+	,.(ENROLID, STATE, SEX, BIRTH_MONTH=month(BIRTH_DATE), 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		BIRTH_DATE=BIRTH_DATE,
+		PCV7COHORT=if_else(N_PCV7>=3 & N_PCV13==0, 1, 0),
+		PCV13COHORT=if_else(N_PCV7==0 & N_PCV13>=3, 1, 0),
+		NOPCVCOHORT=if_else(N_PCV7==0 & N_PCV13==0, 1, 0))][
+	BIRTH_YEAR>=2008 & BIRTH_YEAR<=2012][
+	PCV7COHORT==1, PCVCOHORT:="7"][
+	PCV13COHORT==1, PCVCOHORT:="13"][
+	NOPCVCOHORT==1, PCVCOHORT:="None"][
+	is.na(PCVCOHORT), PCVCOHORT:="Other"]
+	#[
+	#PCV7COHORT==1 | PCV13COHORT==1 | NOPCVCOHORT==1]
+
+pcvcohorts <- rx_df[CODE %in% antibiotics$NDCNUM][
+	pcvcohorts, on=.(ENROLID)][
+	,NRX:=if_else(is.na(CODE),0,1)][
+	,.(STATE=first(STATE), SEX=first(SEX), BIRTH_DATE=first(BIRTH_DATE), BIRTH_MONTH=first(BIRTH_MONTH), BIRTH_YEAR=first(BIRTH_YEAR), PCV7COHORT=first(PCV7COHORT), PCV13COHORT=first(PCV13COHORT), NOPCVCOHORT=first(NOPCVCOHORT), PCVCOHORT=first(PCVCOHORT), NRX=sum(NRX)),by=.(ENROLID)]
+
+fig_pcvrx_birthyear <- pcvcohorts %>% 
+	as_tibble() %>% 
+	filter(PCV7COHORT==1 | PCV13COHORT==1 | NOPCVCOHORT==1) %>% 
+	group_by(PCVCOHORT, BIRTH_YEAR) %>% 
+	summarise(NRX=sum(NRX), NMEMB=n()) %>% 
+	ungroup() %>% 
+	mutate(PCVCOHORT=factor(PCVCOHORT, levels=c("7","13","None"))) %>% 
+	ungroup() %>% 
+	select(PCVCOHORT, BIRTH_YEAR, NRX, NMEMB) %>% 
+	mutate(RXPP=NRX/NMEMB) %>% 
+	filter(!(PCVCOHORT=="13"&BIRTH_YEAR<2010)) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=RXPP, col=PCVCOHORT)) + 
+		geom_point() + 
+		geom_line() + 
+		theme_minimal() + 
+		expand_limits(y=0) + 
+		scale_x_continuous(breaks=2008:2012) + 
+		scale_color_manual(values=c("None"="black","7"="red","13"="blue"), labels=c("None"="None","7"="PCV7","13"="PCV13")) + 
+		labs(x="Birth year", y="Prescriptions per person by age 5", col="PCV received")
+ggsave(fig_pcvrx_birthyear, file="figures/under5/pcvrx_birthyear.pdf",width=8,height=5)
+
+fig_pcvrx_birthmonth <- pcvcohorts %>% 
+	as_tibble() %>% 
+	filter(PCV7COHORT==1 | PCV13COHORT==1 | NOPCVCOHORT==1) %>% 
+	group_by(PCVCOHORT, BIRTH_YEAR, BIRTH_MONTH) %>%
+	summarise(NRX=sum(NRX), NMEMB=n()) %>% 
+	ungroup() %>% 
+	mutate(PCVCOHORT=factor(PCVCOHORT, levels=c("7","13","None"))) %>% 
+	ungroup() %>% 
+	select(PCVCOHORT, BIRTH_YEAR, BIRTH_MONTH, NRX, NMEMB) %>% 
+	mutate(RXPP=NRX/NMEMB) %>% 
+	filter(!(PCVCOHORT=="13"&BIRTH_YEAR<2010)) %>% 
+	mutate(DATE=ymd(paste0(BIRTH_YEAR,"/",BIRTH_MONTH,",","1"))) %>% 
+	ggplot(aes(x=DATE, y=RXPP, col=PCVCOHORT)) + 
+		geom_point() + 
+		geom_line(alpha=0.2) + 
+		geom_line(stat="smooth", method="loess", span=0.8) + 
+		theme_minimal() + 
+		expand_limits(y=0) + 
+		scale_x_date(breaks="1 year", labels=date_format("%Y")) + 
+		scale_color_manual(values=c("None"="black","7"="red","13"="blue"), labels=c("None"="None","7"="PCV7","13"="PCV13")) + 
+		labs(x="Birth month", y="Prescriptions per person by age 5", col="PCV received")
+ggsave(fig_pcvrx_birthmonth, file="figures/under5/pcvrx_birthmonth.pdf",width=8,height=5)
+
+
+
+# Plotting at the individual level: 
+# fig_pcvrx_indiv <- pcvcohorts %>% 
+# 	as_tibble() %>% 
+# 	mutate(PCVCOHORT=case_when(PCV7COHORT==1~"7",PCV13COHORT==1~"13",NOPCVCOHORT==1~"None")) %>% 
+# 	ggplot(aes(x=BIRTH_DATE, y=NRX, col=PCVCOHORT)) + 
+# 			geom_point(alpha=0.1) + 
+# 			geom_smooth(method="loess", span=0.2)  +
+# 			theme_minimal() + 
+# 			coord_cartesian(ylim=c(0,10))
+# ggsave(fig_pcvrx_indiv, file="figures/under5/pcvrx_indiv.pdf",width=8,height=5)
+
+
+pcv_cohort_sizes <- pcvcohorts[,.(NMEMB=.N),by=.(BIRTH_YEAR, PCVCOHORT)]
+
+# Look at otitis media by PCV status: 
+
+fig_cumvisit_vax_om <- make_cumvisit_vax_fig("Otitis media")
+fig_cumvisit_vax_sinusitis <- make_cumvisit_vax_fig("Sinusitis")
+fig_cumvisit_vax_pneumonia <- make_cumvisit_vax_fig("Pneumonia")
+fig_cumvisit_vax_strepphar <- make_cumvisit_vax_fig("Strep pharyngitis")
+fig_cumvisit_vax_uri <- make_cumvisit_vax_fig("URI (other)")
+
+ggsave(fig_cumvisit_vax_om, file="figures/under5/cumvisit_vax_om.pdf",width=8,height=5)
+ggsave(fig_cumvisit_vax_sinusitis, file="figures/under5/cumvisit_vax_sinusitis.pdf",width=8,height=5)
+ggsave(fig_cumvisit_vax_pneumonia, file="figures/under5/cumvisit_vax_pneumonia.pdf",width=8,height=5)
+ggsave(fig_cumvisit_vax_strepphar, file="figures/under5/cumvisit_vax_strepphar.pdf",width=8,height=5)
+ggsave(fig_cumvisit_vax_uri, file="figures/under5/cumvisit_vax_uri.pdf",width=8,height=5)
+
+# =============================================================================
+# Disease vs Stewardship
+# =============================================================================
+
+nrx_df <- visit_df[
+	(rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Get only new prescriptions, not refills: 
+	REFILL==0][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(BIRTH_YEAR=year(BIRTH_DATE), ASSOC_VISIT_ID)][
+	# Keep only birth years in 2008-2012:
+	BIRTH_YEAR %in% 2008:2012]),
+	# Left join on visit_df (way back at the beginning):
+	,on=.(ID=ASSOC_VISIT_ID)][
+	# Extract useful columns: 
+	,.(BIRTH_YEAR,COND,ID)][
+	# Assign condition "unlinked" to unlinked prescriptions: 
+	is.na(ID),COND:="Unlinked"][
+	# Assign NA conditions as "Other": 
+	is.na(COND),COND:="Other"][
+	# Count prescriptions by birth year and condition: 
+	,.(NRX=.N),by=.(BIRTH_YEAR, COND)] %>% 
+	# Convert to tibble and sort: 
+	as_tibble() %>% 
+	arrange(BIRTH_YEAR, desc(NRX))
+
+
+nvisit_df <- visit_df[
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(BIRTH_YEAR=year(BIRTH_DATE), COND)][
+	# Keep only birth years in 2008-2012:
+	BIRTH_YEAR %in% 2008:2012][
+	# Assign NA conditions as "Other": 
+	is.na(COND),COND:="Other"][
+	# Count visits by birth year and condition
+	,.(NVISITS=.N),by=.(BIRTH_YEAR, COND)] %>% 
+	# Convert to tibble and sort: 
+	as_tibble() %>% 
+	arrange(BIRTH_YEAR, desc(NVISITS))
+
+
+rv_df <- nrx_df %>% 
+	inner_join(nvisit_df, by=c("BIRTH_YEAR","COND")) %>% 
+	left_join(cohort_sizes, by="BIRTH_YEAR") %>%
+	mutate(v=NVISITS/NMEMB, r=NRX/NVISITS)
+
+
+disease_stewardship_table <- rv_df %>% 
+	select(BIRTH_YEAR, COND, v, r) %>% 
+	mutate(reference=case_when(BIRTH_YEAR==2008~1,TRUE~0)) %>% 
+	split(.$reference) %>% 
+	map(~ select(.,-reference)) %>% 
+	(function(lst){left_join(lst[[1]],lst[[2]],by=c("COND"),suffix=c("","08"))}) %>%
+	select(-BIRTH_YEAR08) %>% 
+	mutate(stewardship= v08*r - v08*r08 ) %>% 
+	mutate(disease= v*r08 - v08*r08) %>% 
+	mutate(residual= v*r + v08*r08 - v08*r - v*r08) %>% 
+	select(BIRTH_YEAR, COND, stewardship, disease, residual) %>% 
+	pivot_longer(c("stewardship","disease","residual"), names_to="factor", values_to="deltaRx") %>% 
+	arrange(BIRTH_YEAR, deltaRx) %>% 
+	pivot_wider(names_from=BIRTH_YEAR, values_from=deltaRx) %>% 
+	arrange(`2012`)
+
+write_csv(disease_stewardship_table, path="figures/under5/disease_stewardship_table.csv")
+
+
+fig_key_visits <- rv_df %>% 
+	filter(COND %in% c("Otitis media","Sinusitis","Other","URI (other)")) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=v, col=COND)) + 
+		geom_point() + 
+		geom_line()  + 
+		theme_minimal() + 
+		expand_limits(y=0) + 
+		labs(x="Birth year", y="Number of visits by age 5 for key conditions")
+ggsave(fig_key_visits, file="figures/under5/key_visits.pdf",width=8,height=5)
+
+fig_key_prescribingpervisit <- rv_df %>% 
+	filter(COND %in% c("Otitis media","Sinusitis","Other","URI (other)")) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=r, col=COND)) + 
+		geom_point() + 
+		geom_line() + 
+		theme_minimal() + 
+		expand_limits(y=0) + 
+		labs(x="Birth year", y="Per-visit prescribing for key conditions")
+ggsave(fig_key_prescribingpervisit, file="figures/under5/key_prescribingpervisit.pdf",width=8,height=5)
+
+fig_unlinked <- nrx_df %>% 
+	filter(COND == "Unlinked") %>% 
+	left_join(cohort_sizes, by="BIRTH_YEAR") %>% 
+	mutate(rxpp=NRX/NMEMB) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=rxpp)) + 
+		geom_point() + 
+		geom_line() + 
+		expand_limits(y=0) + 
+		theme_minimal() + 
+		labs(x="Birth year", y="Unlinked prescriptions per person by age 5")
+ggsave(fig_unlinked, file="figures/under5/unlinked.pdf",width=8,height=5)
+
+#####
+
+# =============================================================================
+# Poisson regression
+# =============================================================================
+
+regressiondf <- merge(
+	visit_df[,.(ENROLID,COND,VISIT_ID=ID,NVISITS=1)],
+	rx_df[REFILL==0 & CODE%in%antibiotics$NDCNUM,.(ENROLID,RX_ID=ID,VISIT_ID=ASSOC_VISIT_ID,NRX=1)],
+	by=c("ENROLID","VISIT_ID"), all=TRUE)
+regressiondf <- regressiondf[is.na(NVISITS), COND:="Unlinked"][
+	is.na(NVISITS), NVISITS:=0][
+	is.na(COND), COND:="Other"][
+	is.na(NRX), NRX:=0][
+	,.(COND=first(COND), NVISITS=first(NVISITS), NRX=sum(NRX)), by=.(ENROLID, VISIT_ID)][
+	,.(NVISITS=sum(NVISITS), NRX=sum(NRX)), by=.(ENROLID, COND)] %>%
+	as_tibble() %>% 
+	split(.$COND) %>% 
+	map(~ left_join(select(as_tibble(filter(memb_df,NDAYS==1800)), ENROLID, STATE, SEX, BIRTH_DATE), ., by="ENROLID")) %>% 
+	map(~ mutate(., BIRTH_YEAR=year(BIRTH_DATE))) %>% 
+	map(~ select(., -BIRTH_DATE)) %>% 
+	map(~ replace_na(., list(NVISITS=0, NRX=0))) %>% 
+	map(~ select(., -COND)) %>%
+	bind_rows(.id="COND")
+regressiondf$STATE <- factor(regressiondf$STATE)
+regressiondf$SEX <- factor(regressiondf$SEX)
+regressiondf$BIRTH_YEAR <- factor(regressiondf$BIRTH_YEAR)
+
+regressiondf %>% 
+	filter(COND=="Otitis media") %>% 
+	summarise(NVISITS=sum(NVISITS)/n(), NRX=sum(NRX)/n(), PRX=NRX/NVISITS)
+
+regressiondf %>% 
+	filter(COND=="SSTI") %>% 
+	ggplot(aes(x=NVISITS)) + 
+		geom_histogram(binwidth=1)
+
+max(filter(regressiondf, COND=="Otitis media")$NVISITS)
+
+visitfits <- regressiondf %>% 
+	filter(COND!="Unlinked") %>% 
+	split(.$COND) %>% 
+	map(~ glm(NVISITS ~ BIRTH_YEAR + STATE + SEX, 
+	# map(~ glm(NVISITS ~ BIRTH_YEAR*STATE + SEX, 
+		family="poisson", data=.))
+
+prxfits <- regressiondf %>% 
+	filter(COND!="Unlinked") %>% 
+	filter(NVISITS>0) %>% 
+	split(.$COND) %>% 
+	map(~ glm(NRX ~ BIRTH_YEAR + STATE + SEX + offset(log(NVISITS)), 
+	# map(~ glm(NRX ~ BIRTH_YEAR*STATE + SEX + offset(log(NVISITS)), 
+		family="poisson", data=.))
+
+unlinkedrxfits <- regressiondf %>% 
+	filter(COND=="Unlinked") %>% 
+	split(.$COND) %>% 
+	map(~ glm(NRX ~ BIRTH_YEAR + STATE + SEX, 
+	# map(~ glm(NRX ~ BIRTH_YEAR*STATE + SEX, 
+		family="poisson", data=.))
+
+visitfits_interaction <- regressiondf %>% 
+	filter(COND!="Unlinked") %>% 
+	split(.$COND) %>% 
+	# map(~ glm(NVISITS ~ BIRTH_YEAR + STATE + SEX, 
+	map(~ glm(NVISITS ~ BIRTH_YEAR*STATE + SEX, 
+		family="poisson", data=.))
+
+prxfits_interaction <- regressiondf %>% 
+	filter(COND!="Unlinked") %>% 
+	filter(NVISITS>0) %>% 
+	split(.$COND) %>% 
+	# map(~ glm(NRX ~ BIRTH_YEAR + STATE + SEX + offset(log(NVISITS)), 
+	map(~ glm(NRX ~ BIRTH_YEAR*STATE + SEX + offset(log(NVISITS)), 
+		family="poisson", data=.))
+
+unlinkedrxfits_interaction <- regressiondf %>% 
+	filter(COND=="Unlinked") %>% 
+	split(.$COND) %>% 
+	# map(~ glm(NRX ~ BIRTH_YEAR + STATE + SEX, 
+	map(~ glm(NRX ~ BIRTH_YEAR*STATE + SEX, 
+		family="poisson", data=.))
+
+
+# m1 <- glm(NVISITS ~ STATE + SEX + BIRTH_YEAR, 
+# 	family="poisson", 
+# 	data=filter(regressiondf, COND=="Otitis media"))
+# summary(m1)
+# tidy(m1)
+
+visit_est <- visitfits %>%
+	map(~ tidy(.)) %>% 
+	map(~ filter(., term=="(Intercept)")) %>% 
+	map(~ mutate(., est_visits=exp(estimate))) %>% 
+	map(~ select(., est_visits)) %>% 
+	bind_rows(.id="COND")
+
+prx_est <- prxfits %>%
+	map(~ tidy(.)) %>% 
+	map(~ filter(., term=="(Intercept)")) %>% 
+	map(~ mutate(., est_prx=exp(estimate))) %>% 
+	map(~ select(., est_prx)) %>% 
+	bind_rows(.id="COND")
+
+inner_join(visit_est, prx_est, by="COND") %>% 
+	mutate(nrx_est = est_visits*est_prx)
+
+
+
+visit_pctchange <- visitfits %>%
+	map(~ tidy(.)) %>% 
+	map(~ select(., term, estimate)) %>% 
+	map(~ filter(., term %in% c(
+		"BIRTH_YEAR2009",
+		"BIRTH_YEAR2010",
+		"BIRTH_YEAR2011",
+		"BIRTH_YEAR2012")
+	)) %>% 
+	map(~ mutate(., pctchange_visits=exp(estimate)-1)) %>% 
+	map(~ select(., term, pctchange_visits)) %>% 
+	bind_rows(.id="COND")
+
+
+prx_pctchange <- prxfits %>%
+	map(~ tidy(.)) %>% 
+	map(~ select(., term, estimate)) %>% 
+	map(~ filter(., term %in% c(
+		"BIRTH_YEAR2009",
+		"BIRTH_YEAR2010",
+		"BIRTH_YEAR2011",
+		"BIRTH_YEAR2012")
+	)) %>% 
+	map(~ mutate(., pctchange_prx=exp(estimate)-1)) %>% 
+	map(~ select(., term, pctchange_prx)) %>% 
+	bind_rows(.id="COND")
+
+
+fig_pctchange <- inner_join(
+	visit_pctchange, prx_pctchange, by=c("COND","term")) %>% 
+	filter(COND %in% c("URI (other)","Otitis media","SSTI")) %>% 
+	mutate(term=substr(term,11,14)) %>% 
+	mutate(BIRTH_YEAR=as.numeric(term)) %>% 
+	select(-term) %>% 
+	pivot_longer(c("pctchange_visits","pctchange_prx"),names_to="SOURCE") %>% 
+	mutate(SOURCE=substr(SOURCE,11,100000)) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=value, linetype=SOURCE, col=COND)) + 
+		geom_line() 
+
+
+
+
+
+
+
+# regressiondf %>% 
+# 	filter(COND!="Unlinked") %>% 
+# 	filter(SEX==1) %>% 
+# 	filter(STATE=="Alabama") %>% 
+# 	filter(BIRTH_YEAR==2008) %>% 
+# 	group_by(COND) %>% 
+# 	summarise(NVISITS=sum(NVISITS)/n(), NRX=sum(NRX)/n(), PRX=NRX/NVISITS)
+
+# These match pretty well with the raw data! 
+
+
+# Check impact on prescribing: 
+
+
+
+
+# mystate <- "Massachusetts"
+# mysex <- "2"
+
+# termstokeep <- c("(Intercept)", "BIRTH_YEAR2009", "BIRTH_YEAR2010", "BIRTH_YEAR2011", "BIRTH_YEAR2012")
+# if(mystate!="Alabama"){termstokeep <- c(termstokeep, paste0("STATE",mystate))}
+# if(mysex!="1"){termstokeep <- c(termstokeep, paste0("SEX",mystate))}
+
+# visitfits %>%
+# 	map(~ tidy(.)) %>% 
+# 	map(~ select(., term, estimate)) %>% 
+# 	map(~ filter(., term %in% termstokeep)) %>% 
+# 	map(~ pivot_wider(., names_from="term", values_from="estimate")) %>% 
+# 	map(~ mutate(., BASELINE=across(c("(Intercept)",ifelse(mystate!="Alabama",paste0("STATE",mystate),"")), sum)))
+
+# 	%>% 
+# 	map(~ filter(., term %in% c(
+# 		"(Intercept)",)
+# 	)) %>% 
+# 	map(~ mutate(., est_visits=exp(estimate))) %>% 
+# 	map(~ select(., est_visits)) %>% 
+# 	bind_rows(.id="COND")
+
+
+
+
+
+
+
+# prx_est <- prxfits %>%
+# 	map(~ tidy(.)) %>% 
+# 	map(~ filter(., term %in% c(
+# 		"(Intercept)",)
+# 	)) %>% 
+# 	map(~ mutate(., est_prx=exp(estimate))) %>% 
+# 	map(~ select(., est_prx)) %>% 
+# 	bind_rows(.id="COND")
+
+# inner_join(visit_est, prx_est, by="COND") %>% 
+# 	mutate(nrx_est = est_visits*est_prx)
+
+#####
+
+# adr cumulatve: ------------------------------------------------------------- 
+rx_df_adr <- rx_df[
+	# Inner-join to on 'adrenals' to pull out adr prescriptions:
+	adrenals[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumrx_df_adr <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumrx_df_adr <- rbind(cumrx_df_adr,
+		rx_df_adr[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumrx_df_adr <- cumrx_df_adr[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+
+cumrx_df_adr <- as_tibble(cumrx_df_adr)
+fig_cumrx_adr <- cumrx_df_adr %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative adrenals prescriptions", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumrx_adr, file="figures/under5/cumrx_adr.pdf",width=8,height=5)
+
+
+# combined: -------------------------------------------------------------------
+
+fig_cumrx_combined <- bind_rows(
+	mutate(cumrx_df_abx, CLASS="Antibiotic"),
+	mutate(cumrx_df_adr, CLASS="Adrenal")
+	) %>% 
+	mutate(CLASS=factor(CLASS, levels=c("Antibiotic","Adrenal"))) %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR), fill=factor(BIRTH_YEAR), lty=CLASS)) + 
+		geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.4, col=NA) + 
+		geom_line(stat="smooth", method="loess", span=0.2) + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative prescriptions per person", col="Birth Year", fill="Birth Year", lty="Drug Class") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 	
+ggsave(fig_cumrx_combined, file="figures/under5/cumrx_combined.pdf",width=8,height=5)
+
+
+
+# =============================================================================
+# Time to first antibiotic 
+# =============================================================================
+
+# abx -------------------------------------------------------------------------
+first_rx_df_abx <- rx_df_abx[,.(BIRTH_YEAR=first(BIRTH_YEAR), AGE_DAYS=min(AGE_DAYS)), by=.(ENROLID)]
+
+first_cumrx_df_abx <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	first_cumrx_df_abx <- rbind(first_cumrx_df_abx,
+		first_rx_df_abx[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+first_cumrx_df_abx <- first_cumrx_df_abx[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+
+first_cumrx_df_abx <- as_tibble(first_cumrx_df_abx)
+fig_first_cumrx_abx <- first_cumrx_df_abx %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Proportion who have received an antibiotic prescription", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+
+# adr -------------------------------------------------------------------------
+
+first_rx_df_adr <- rx_df_adr[,.(BIRTH_YEAR=first(BIRTH_YEAR), AGE_DAYS=min(AGE_DAYS)), by=.(ENROLID)]
+
+first_cumrx_df_adr <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	first_cumrx_df_adr <- rbind(first_cumrx_df_adr,
+		first_rx_df_adr[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+first_cumrx_df_adr <- first_cumrx_df_adr[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+
+first_cumrx_df_adr <- as_tibble(first_cumrx_df_adr)
+fig_first_cumrx_adr <- first_cumrx_df_adr %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Proportion who have received an adrenal prescription", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+
+# combined --------------------------------------------------------------------
+fig_first_cumrx_combined <- bind_rows(
+	mutate(first_cumrx_df_abx, CLASS="Antibiotic"),
+	mutate(first_cumrx_df_adr, CLASS="Adrenal")
+	) %>% 
+	mutate(CLASS=factor(CLASS, levels=c("Antibiotic","Adrenal"))) %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR), fill=factor(BIRTH_YEAR), lty=CLASS)) + 
+		# geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.4, col=NA) + 
+		geom_line(stat="smooth", method="loess", span=0.2) + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative prescriptions per person", col="Birth Year", fill="Birth Year", lty="Drug Class") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+
+ggsave(fig_first_cumrx_combined, file="figures/under5/first_cumrx_combined.pdf",width=8,height=5)
+
+# =============================================================================
+# Cumulative visits over time 
+# =============================================================================
+
+# otitis media: -------------------------------------------------------------- 
+visit_df_om <- visit_df[COND=="Otitis media"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_om <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_om <- rbind(cumvisit_df_om,
+		visit_df_om[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumvisit_df_om <- cumvisit_df_om[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+
+cumvisit_df_om <- as_tibble(cumvisit_df_om)
+fig_cumvisit_om <- cumvisit_df_om %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative otitis media visits", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumvisit_om, file="figures/under5/cumvisit_om.pdf",width=8,height=5)
+
+# uri: ----------------------------------------------------------------------- 
+visit_df_uri <- visit_df[COND=="URI (other)"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_uri <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_uri <- rbind(cumvisit_df_uri,
+		visit_df_uri[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumvisit_df_uri <- cumvisit_df_uri[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+
+cumvisit_df_uri <- as_tibble(cumvisit_df_uri)
+fig_cumvisit_uri <- cumvisit_df_uri %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative URI (other) visits", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumvisit_uri, file="figures/under5/cumvisit_uri.pdf",width=8,height=5)
+
+# bronchitis: ---------------------------------------------------------------- 
+visit_df_bronch <- visit_df[COND=="Bronchitis (acute)"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_bronch <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_bronch <- rbind(cumvisit_df_bronch,
+		visit_df_bronch[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumvisit_df_bronch <- cumvisit_df_bronch[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+
+cumvisit_df_bronch <- as_tibble(cumvisit_df_bronch)
+fig_cumvisit_bronch <- cumvisit_df_bronch %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative acute bronchitis visits", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumvisit_bronch, file="figures/under5/cumvisit_bronch.pdf",width=8,height=5)
+
+
+# SSTI: ---------------------------------------------------------------- 
+visit_df_ssti <- visit_df[COND=="SSTI"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_ssti <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_ssti <- rbind(cumvisit_df_ssti,
+		visit_df_ssti[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumvisit_df_ssti <- cumvisit_df_ssti[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+
+cumvisit_df_ssti <- as_tibble(cumvisit_df_ssti)
+fig_cumvisit_ssti <- cumvisit_df_ssti %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative SSTI visits", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumvisit_ssti, file="figures/under5/cumvisit_ssti.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Cumulative prescriptions by HHS region
+# =============================================================================
+
+# Cumulative prescriptions
+totrx_df_abx_state <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE)][
+	,.(NRX=.N),by=.(STATE)][
+	memb_df[,.(NMEMB=.N),by=STATE],nomatch=0,on=.(STATE)]
+
+
+fig_totrx_abx_map <- totrx_df_abx_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=NRX/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean prescriptions per person\nby age 5")
+ggsave(fig_totrx_abx_map, file="figures/under5/totrx_abx_map.pdf",width=8,height=5)
+
+# Decline in prescriptions: map
+totrx_df_abx_state_cohort <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE, BIRTH_YEAR=year(BIRTH_DATE))][
+	,.(NRX=.N),by=.(STATE, BIRTH_YEAR)][
+	memb_df[,.(STATE,BIRTH_YEAR=year(BIRTH_DATE))][
+		,.(NMEMB=.N),by=.(STATE,BIRTH_YEAR)],nomatch=0,on=.(STATE, BIRTH_YEAR)]
+
+fig_deltarx_abx_map <- totrx_df_abx_state_cohort %>% 
+	as_tibble() %>% 
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS, BIRTH_YEAR) %>%
+	summarise(NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+	filter(BIRTH_YEAR %in% c(2008,2012)) %>%
+	mutate(RXPP=NRX/NMEMB) %>%
+	select(HHS, BIRTH_YEAR, RXPP) %>%
+	pivot_wider(names_from="BIRTH_YEAR", values_from="RXPP") %>%
+	mutate(DELTA_RXPP=(`2012`-`2008`)/`2008`) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=DELTA_RXPP*100, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="% change in antibiotic prescriptions\nper person by age 5, 2008-2012")
+ggsave(fig_deltarx_abx_map, file="figures/under5/deltarx_abx_map.pdf",width=8,height=5)
+
+# Decline in prescriptions: curves
+rx_df_abx_state <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")),
+		STATE)]
+
+cumrx_df_abx_state <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumrx_df_abx_state <- rbind(cumrx_df_abx_state,
+		rx_df_abx_state[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR,STATE)])
+}
+cumrx_df_abx_state <- cumrx_df_abx_state[cohort_sizes_state,nomatch=0,on=.(BIRTH_YEAR,STATE)]
+
+cumrx_df_abx_state <- as_tibble(cumrx_df_abx_state)
+fig_cumrx_abx_HHS <- cumrx_df_abx_state %>% 
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS, BIRTH_YEAR, AGE_DAYS_ROUNDED) %>%
+	summarise(NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+	left_join(HHSnames,by="HHS") %>%
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative antibiotic prescriptions", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") + 
+		facet_wrap(~factor(HHSname))
+ggsave(fig_cumrx_abx_HHS, file="figures/under5/cumrx_abx_HHS.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Cumulative visits by HHS region
+# =============================================================================
+
+# otitis media: ---------------------------------------------------------------
+totvisit_df_om_state <- visit_df[COND=="Otitis media"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE)][
+	,.(NVISITS=.N),by=.(STATE)][
+	memb_df[,.(NMEMB=.N),by=STATE],nomatch=0,on=.(STATE)]
+
+fig_totvisit_om_map <- totvisit_df_om_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(NVISITS=sum(NVISITS), NMEMB=sum(NMEMB)) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=NVISITS/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean otitis media visits per person\nby age 5")
+ggsave(fig_totvisit_om_map, file="figures/under5/totvisit_om_map.pdf",width=8,height=5)
+
+# uri: ------------------------------------------------------------------------
+totvisit_df_uri_state <- visit_df[COND=="URI (other)"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE)][
+	,.(NVISITS=.N),by=.(STATE)][
+	memb_df[,.(NMEMB=.N),by=STATE],nomatch=0,on=.(STATE)]
+
+fig_totvisit_uri_map <- totvisit_df_uri_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(NVISITS=sum(NVISITS), NMEMB=sum(NMEMB)) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=NVISITS/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean URI (other) visits per person\nby age 5")
+ggsave(fig_totvisit_uri_map, file="figures/under5/totvisit_uri_map.pdf",width=8,height=5)
+
+# bronchitis: -----------------------------------------------------------------
+totvisit_df_bronch_state <- visit_df[COND=="Bronchitis (acute)"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE)][
+	,.(NVISITS=.N),by=.(STATE)][
+	memb_df[,.(NMEMB=.N),by=STATE],nomatch=0,on=.(STATE)]
+
+fig_totvisit_bronch_map <- totvisit_df_bronch_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(NVISITS=sum(NVISITS), NMEMB=sum(NMEMB)) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=NVISITS/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean acute bronchitis visits per person\nby age 5")
+ggsave(fig_totvisit_bronch_map, file="figures/under5/totvisit_bronch_map.pdf",width=8,height=5)
+
+
+# SSTI: -----------------------------------------------------------------
+totvisit_df_ssti_state <- visit_df[COND=="SSTI"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE)][
+	,.(NVISITS=.N),by=.(STATE)][
+	memb_df[,.(NMEMB=.N),by=STATE],nomatch=0,on=.(STATE)]
+
+fig_totvisit_ssti_map <- totvisit_df_ssti_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(NVISITS=sum(NVISITS), NMEMB=sum(NMEMB)) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=NVISITS/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean acute SSTI visits per person\nby age 5")
+ggsave(fig_totvisit_ssti_map, file="figures/under5/totvisit_ssti_map.pdf",width=8,height=5)
+
+# =============================================================================
+# visits most frequently associated with prescriptions
+# =============================================================================
+
+rx_visit_map <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		ASSOC_VISIT_ID)]
+
+rx_visit_map <- visit_df[,.(COND,ID)][
+	rx_visit_map,on=c(ID="ASSOC_VISIT_ID")]
+
+linked_rx_summary <- rx_visit_map[,UNLINKED:=if_else(is.na(ID),1,0)][
+	,.(NRX=.N),by=.(COND,UNLINKED,BIRTH_YEAR)] %>%
+	as_tibble() %>%
+	mutate(COND=as.character(COND)) %>%
+	mutate(COND=case_when(UNLINKED==1~"Unlinked",TRUE~COND)) %>%
+	mutate(COND=case_when(is.na(COND)~"Other",TRUE~COND)) %>%
+	select(-UNLINKED) %>%
+	arrange(BIRTH_YEAR,desc(NRX)) %>%
+	group_by(BIRTH_YEAR) %>%
+	mutate(PCTRX=NRX/sum(NRX)*100)
+
+linked_rx_summary %>% 
+	select(COND,BIRTH_YEAR,PCTRX) %>%
+	pivot_wider(names_from=BIRTH_YEAR, values_from=PCTRX)
+
+
+# Which diagnoses are the most common in 'other'? 
+visit_df[,.(COND,ID,DX)][rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		ASSOC_VISIT_ID)], on=c(ID="ASSOC_VISIT_ID")][
+	(!is.na(ID)) & (is.na(COND))][
+	,.(NVISITS=.N),by=.(DX)] %>%
+	as_tibble() %>%
+	arrange(desc(NVISITS)) %>%
+	mutate(POTHER=NVISITS/sum(NVISITS)) %>%
+	print(n=15)
+
+
+
+#    COND                        BIRTH_YEAR   NRX   PCTRX
+#    <chr>                            <int> <int>   <dbl>
+#  1 Unlinked                          2008 11909 75.0
+#  2 Other                             2008  2097 13.2
+#  3 URI (other)                       2008   796  5.01
+#  4 Otitis media                      2008   734  4.62
+#  5 Bronchitis (acute)                2008   127  0.799
+#  6 Pneumonia                         2008    75  0.472
+#  7 Asthma                            2008    59  0.371
+#  8 UTI                               2008    35  0.220
+#  9 SSTI                              2008    34  0.214
+# 10 Influenza                         2008    11  0.0692
+# 11 Intestinal infection              2008     7  0.0441
+# 12 Bacterial infection (other)       2008     2  0.0126
+# 13 Unlinked                          2009 11217 75.1
+# 14 Other                             2009  2040 13.7
+# 15 URI (other)                       2009   724  4.85
+# 16 Otitis media                      2009   660  4.42
+# 17 Bronchitis (acute)                2009    99  0.663
+# 18 Pneumonia                         2009    62  0.415
+# 19 Asthma                            2009    46  0.308
+# 20 SSTI                              2009    35  0.234
+# 21 UTI                               2009    23  0.154
+# 22 Influenza                         2009    14  0.0938
+# 23 Intestinal infection              2009     9  0.0603
+# 24 Bacterial infection (other)       2009     2  0.0134
+# 25 Unlinked                          2010 10320 75.0
+# 26 Other                             2010  1843 13.4
+# 27 URI (other)                       2010   735  5.34
+# 28 Otitis media                      2010   581  4.22
+# 29 Bronchitis (acute)                2010    93  0.676
+# 30 Asthma                            2010    50  0.363
+# 31 Pneumonia                         2010    42  0.305
+# 32 SSTI                              2010    36  0.262
+# 33 UTI                               2010    23  0.167
+# 34 Intestinal infection              2010    18  0.131
+# 35 Influenza                         2010    16  0.116
+# 36 Bacterial infection (other)       2010     4  0.0291
+# 37 Unlinked                          2011 10864 75.2
+# 38 Other                             2011  1921 13.3
+# 39 URI (other)                       2011   722  5.00
+# 40 Otitis media                      2011   622  4.30
+# 41 Bronchitis (acute)                2011   104  0.720
+# 42 Asthma                            2011    58  0.401
+# 43 Pneumonia                         2011    46  0.318
+# 44 UTI                               2011    45  0.311
+# 45 SSTI                              2011    39  0.270
+# 46 Influenza                         2011    13  0.0900
+# 47 Intestinal infection              2011    12  0.0830
+# 48 Bacterial infection (other)       2011     5  0.0346
+# 49 Unlinked                          2012  8154 75.4
+# 50 Other                             2012  1485 13.7
+# 51 Otitis media                      2012   471  4.36
+# 52 URI (other)                       2012   466  4.31
+# 53 Bronchitis (acute)                2012    78  0.722
+# 54 Pneumonia                         2012    41  0.379
+# 55 Asthma                            2012    33  0.305
+# 56 SSTI                              2012    30  0.278
+# 57 UTI                               2012    21  0.194
+# 58 Influenza                         2012    16  0.148
+# 59 Intestinal infection              2012     8  0.0740
+# 60 Bacterial infection (other)       2012     6  0.0555
+
+
+# =============================================================================
+# PCV uptake over time 
+# =============================================================================
+
+vax_df_pcv <- vax_df[CODE %in% c("90669", "90670")][
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvax_df_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvax_df_pcv <- rbind(cumvax_df_pcv,
+		vax_df_pcv[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(BIRTH_YEAR)])
+}
+cumvax_df_pcv <- cumvax_df_pcv[cohort_sizes,nomatch=0,on=.(BIRTH_YEAR)]
+
+cumvax_df_pcv <- as_tibble(cumvax_df_pcv)
+fig_cumvax_pcv <- cumvax_df_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(BIRTH_YEAR),fill=factor(BIRTH_YEAR))) + 
+		# geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative PCV vaccinations", col="Birth Year", fill="Birth Year") + 
+		scale_color_brewer(palette="Set1") + 
+		scale_fill_brewer(palette="Set1") 
+ggsave(fig_cumvax_pcv, file="figures/under5/cumvax_pcv.pdf",width=8,height=5)
+
+# =============================================================================
+# Cumulative PCV vaccinations by HHS region
+# =============================================================================
+
+totvax_df_pcv_state <- vax_df[CODE %in% c("90669", "90670")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	,.(STATE)][
+	,.(NVAX=.N),by=.(STATE)][
+	memb_df[,.(NMEMB=.N),by=STATE],nomatch=0,on=.(STATE)]
+
+fig_totvax_pcv_map <- totvax_df_pcv_state %>%
+	as_tibble() %>%
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS) %>%
+	summarise(NVAX=sum(NVAX), NMEMB=sum(NMEMB)) %>%
+	left_join(HHS_boundaries_lwr48) %>%
+	ggplot(aes(fill=NVAX/NMEMB, geometry=geometry)) + 
+		geom_sf(color="white") + 
+		scale_fill_distiller(palette="RdBu") + 
+		theme_void() + 
+		labs(fill="Mean PCV vaccinations per person\nby age 5")
+ggsave(fig_totvax_pcv_map, file="figures/under5/totvax_pcv_map.pdf",width=8,height=5)
+# =============================================================================
+# Plot decline in prescribing vs pcv uptake
+# =============================================================================
+
+# totvax_df_pcv_state %>% 
+# 	inner_join(select(totrx_df_abx_state,STATE,NRX), by="STATE") %>%
+# 	make_lwr48 %>%
+# 	makeHHS %>%
+# 	group_by(HHS) %>%
+# 	summarise(NVAX=sum(NVAX), NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+# 	ggplot(aes(x=NVAX/NMEMB, y=NRX/NMEMB)) + 
+# 		geom_point() + 
+# 		theme_minimal()
+
+
+
+
+
+
+
+fig_rxdecline_vs_vax <- totrx_df_abx_state_cohort %>% 
+	as_tibble() %>% 
+	make_lwr48 %>%
+	makeHHS %>%
+	group_by(HHS, BIRTH_YEAR) %>%
+	summarise(NRX=sum(NRX), NMEMB=sum(NMEMB)) %>%
+	filter(BIRTH_YEAR %in% c(2008,2012)) %>%
+	mutate(RXPP=NRX/NMEMB) %>%
+	select(HHS, BIRTH_YEAR, RXPP) %>%
+	pivot_wider(names_from="BIRTH_YEAR", values_from="RXPP") %>%
+	mutate(DELTA_RXPP=(`2012`-`2008`)/`2008`) %>% 
+	inner_join(
+		totvax_df_pcv_state %>% 
+		make_lwr48 %>%
+		makeHHS %>%
+		group_by(HHS) %>%
+		summarise(NVAX=sum(NVAX), NMEMB=sum(NMEMB), PVAX=NVAX/NMEMB),
+		by="HHS"
+		) %>%
+	ggplot(aes(x=PVAX, y=DELTA_RXPP)) + 
+		geom_point() + 
+		theme_minimal() + 
+		labs(x="Mean number of PCV doses (by HHS region)", y="Percent change in antibiotic prescribing, 2009-2012")
+ggsave(fig_rxdecline_vs_vax, file="figures/under5/rxdecline_vs_vax.pdf",width=8,height=5)
+
+
+
+
+
+
+# =============================================================================
+# Distribution of individual-level prescriptions by month 60
+# =============================================================================
+
+totrx_df_abx_indiv <- rx_df[
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	,.(NRX=.N),by=.(ENROLID)][
+	memb_df, on=.(ENROLID)][
+	,.(NRX, BIRTH_YEAR=year(BIRTH_DATE))]
+
+fig_totrx_abx_indiv <- totrx_df_abx_indiv %>% 
+	as_tibble() %>%
+	replace_na(list(NRX=0)) %>%
+	ggplot(aes(x=NRX, col=factor(BIRTH_YEAR), fill=factor(BIRTH_YEAR))) + 
+		geom_density(alpha=0.2) + 
+		theme_minimal() + 
+		labs(x="Number of prescriptions by age 5", y="Density", color="Birth year", fill="Birth year")
+ggsave(fig_totrx_abx_indiv, file="figures/under5/totrx_abx_indiv.pdf",width=8,height=5)
+
+fig_totrx_abx_indiv_boxplot <- totrx_df_abx_indiv %>% 
+	as_tibble() %>%
+	replace_na(list(NRX=0)) %>%
+	ggplot(aes(x=NRX, y=factor(BIRTH_YEAR))) + 
+		geom_boxplot() + 
+		theme_minimal() + 
+		labs(x="Number of prescriptions by age 5", y="Birth year")
+ggsave(fig_totrx_abx_indiv_boxplot, file="figures/under5/totrx_abx_indiv_boxplot.pdf",width=8,height=5)
+
+# =============================================================================
+# Prescribing probabilities and visit rates 
+# =============================================================================
+
+# Prescribing probabilities: 
+
+rx_visit_counts <- rx_df[,.(RX_ID=ID, ASSOC_VISIT_ID)][
+	visit_df, on=c("ASSOC_VISIT_ID"="ID")][
+	,.(COND, ENROLID, HASRX=ifelse(is.na(RX_ID),0,1))][
+	memb_df[,.(ENROLID, BIRTH_YEAR=year(BIRTH_DATE))],nomatch=0,on=.(ENROLID)][
+	,.(NVISITS=.N,NRX=sum(HASRX)),by=.(COND,BIRTH_YEAR)] %>%
+	as_tibble() %>%
+	mutate(COND=as.character(COND), BIRTH_YEAR=as.numeric(BIRTH_YEAR), NVISITS=as.numeric(NVISITS), NRX=as.numeric(NRX))
+
+# write_csv(rx_visit_counts, "output/rx_visit_counts.csv")
+# rx_visit_counts <- read_csv('output/rx_visit_counts.csv')
+
+fig_prx <- rx_visit_counts %>% 
+	mutate(PRX=NRX/NVISITS) %>% 
+	replace_na(list(COND="Other")) %>%
+	# filter(COND!="Bacterial infection (other)") %>% 
+	# filter(COND!="UTI") %>% 
+	# filter(COND!="Otitis media") %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=PRX, col=COND)) + 
+		geom_point() + 
+		geom_line() + 
+		scale_x_continuous(breaks=2008:2012, minor_breaks=seq(from=2008, to=2012, by=0.5), limits=c(2008,2013)) + 
+		labs(x="Birth year", y="Antibiotic prescription probability") + 
+		theme_minimal() + 
+		theme(text=element_text(size=16))
+fig_prx <- direct.label(fig_prx,"last.qp")
+ggsave(fig_prx, file="figures/under5/prx.pdf", width=8, height=5)
+
+# Compare to 2008 levels: 
+
+rx_visit_counts_baseline <- rx_visit_counts %>% 
+	mutate(PRX=NRX/NVISITS) %>%
+	group_by(COND) %>% 
+	mutate(NVISITS_08=case_when(BIRTH_YEAR==2008~NVISITS, TRUE~-Inf)) %>%
+	mutate(NVISITS_08=max(NVISITS_08)) %>%
+	mutate(NRX_08=case_when(BIRTH_YEAR==2008~NRX, TRUE~-Inf)) %>%
+	mutate(NRX_08=max(NRX_08)) %>%
+	mutate(PRX_08=NRX_08/NVISITS_08) %>%
+	mutate(DELTA_NRX_VISITS=NVISITS_08*PRX-NRX) %>%
+	mutate(DELTA_NRX_PRESCRIBING=NVISITS*PRX_08-NRX) %>%
+	ungroup() 
+
+select(rx_visit_counts_baseline, COND, BIRTH_YEAR, NRX, DELTA_NRX_VISITS, DELTA_NRX_PRESCRIBING) %>%
+	print(n=100)
+
+
+# Differences in linked prescriptions by year? 
+linkedrxs <- rx_df[
+	memb_df[,.(ENROLID, BIRTH_YEAR=year(BIRTH_DATE))], nomatch=0, on=.(ENROLID)][
+	,.(BIRTH_YEAR, LINKED=if_else(is.na(ASSOC_VISIT_ID),0,1))][
+	,.(NRX=.N, LINKED=sum(LINKED)), by=.(BIRTH_YEAR)][
+	,.(NRX,LINKED,PLINKED=LINKED/NRX)]
+
+
+temp <- rx_visit_counts %>% 
+	mutate(COND=as.character(COND)) %>%
+	left_join(cohort_sizes,by="BIRTH_YEAR") %>%
+	mutate(VPP=NVISITS/NMEMB, RXPV=NRX/NVISITS, RXPP=NRX/NMEMB) %>%
+	group_by(COND) %>% 
+	mutate(VPP_08=case_when(BIRTH_YEAR==2008~VPP,TRUE~-Inf)) %>%
+	mutate(VPP_08=max(VPP_08)) %>%
+	mutate(RXPV_08=case_when(BIRTH_YEAR==2008~RXPV,TRUE~-Inf)) %>%
+	mutate(RXPV_08=max(RXPV_08)) %>%
+	select(COND, BIRTH_YEAR, VPP, RXPV, RXPP, VPP_08, RXPV_08) %>%
+	mutate(RXPP_WITH08VISITS=VPP_08*RXPV) %>%
+	mutate(RXPP_WITH08PRESCRIBING=VPP*RXPV_08) %>%
+	select(COND, BIRTH_YEAR, RXPP, RXPP_WITH08VISITS, RXPP_WITH08PRESCRIBING)
+
+filter(temp, COND%in%c("Otitis media", "URI (other)", "Bronchitis (acute)")) %>%
+arrange(desc(COND))
+
+
+fig_rxpp_counterfactual_om <- temp %>% 
+	filter(COND=="Otitis media") %>% 
+	pivot_longer(c("RXPP",
+		"RXPP_WITH08VISITS",
+		"RXPP_WITH08PRESCRIBING")) %>% 
+	mutate(name=case_when(
+		name=="RXPP"~"Actual Rx/person",
+		name=="RXPP_WITH08VISITS"~"Rx/person with 2008 visits, varying prescribing",
+		name=="RXPP_WITH08PRESCRIBING"~"Rx/person with varying visits, 2008 prescribing")) %>%
+	ggplot(aes(x=BIRTH_YEAR, y=value, col=name)) + 
+		geom_point() + 
+		geom_line() + 
+		theme_minimal() +
+		theme(legend.title=element_blank()) +  
+		labs(x="Birth year",y="Associated Rx/person by age 5")
+ggsave(fig_rxpp_counterfactual_om, file="figures/under5/rxpp_counterfactual_om.pdf",width=8,height=5)
+
+fig_rxpp_counterfactual_uri <- temp %>% 
+	filter(COND=="URI (other)") %>% 
+	pivot_longer(c("RXPP",
+		"RXPP_WITH08VISITS",
+		"RXPP_WITH08PRESCRIBING")) %>% 
+	mutate(name=case_when(
+		name=="RXPP"~"Actual Rx/person",
+		name=="RXPP_WITH08VISITS"~"Rx/person with 2008 visits, varying prescribing",
+		name=="RXPP_WITH08PRESCRIBING"~"Rx/person with varying visits, 2008 prescribing")) %>%
+	ggplot(aes(x=BIRTH_YEAR, y=value, col=name)) + 
+		geom_point() + 
+		geom_line() + 
+		theme_minimal() +
+		theme(legend.title=element_blank()) +  
+		labs(x="Birth year",y="Associated Rx/person by age 5")
+ggsave(fig_rxpp_counterfactual_uri, file="figures/under5/rxpp_counterfactual_uri.pdf",width=8,height=5)
+
+fig_rxpp_counterfactual_bronch <- temp %>% 
+	filter(COND=="Bronchitis (acute)") %>% 
+	pivot_longer(c("RXPP",
+		"RXPP_WITH08VISITS",
+		"RXPP_WITH08PRESCRIBING")) %>% 
+	mutate(name=case_when(
+		name=="RXPP"~"Actual Rx/person",
+		name=="RXPP_WITH08VISITS"~"Rx/person with 2008 visits, varying prescribing",
+		name=="RXPP_WITH08PRESCRIBING"~"Rx/person with varying visits, 2008 prescribing")) %>%
+	ggplot(aes(x=BIRTH_YEAR, y=value, col=name)) + 
+		geom_point() + 
+		geom_line() + 
+		theme_minimal() +
+		theme(legend.title=element_blank()) +  
+		labs(x="Birth year",y="Associated Rx/person by age 5")
+ggsave(fig_rxpp_counterfactual_bronch, file="figures/under5/rxpp_counterfactual_bronch.pdf",width=8,height=5)
+
+
+
+
+fig_rxpp_counterfactual <- temp %>% 
+	group_by(BIRTH_YEAR) %>% 
+	summarise(RXPP=sum(RXPP), 
+		RXPP_WITH08VISITS=sum(RXPP_WITH08VISITS),
+		RXPP_WITH08PRESCRIBING=sum(RXPP_WITH08PRESCRIBING)) %>%
+	pivot_longer(c("RXPP",
+		"RXPP_WITH08VISITS",
+		"RXPP_WITH08PRESCRIBING")) %>% 
+	ggplot(aes(x=BIRTH_YEAR, y=value, col=name)) + 
+		geom_point() + 
+		geom_line()
+ggsave(fig_rxpp_counterfactual, file="figures/under5/rxpp_counterfactual.pdf",width=8,height=5)
+
+
+
+
+
+temp <- rx_visit_counts_baseline %>% 
+	mutate(NRX_WITH08VISITS=NVISITS_08*PRX) %>%
+	mutate(NRX_WITH08PRESCRIBING=NVISITS*PRX_08) %>%
+	select(COND,BIRTH_YEAR,NRX,NRX_WITH08VISITS,NRX_WITH08PRESCRIBING)
+
+
+# =============================================================================
+# Comparing PCV cohorts
+# =============================================================================
+
+pcvcohorts <- vax_df[CODE%in%c("90669","90670")][
+	,.(ENROLID,DATE,CODE,
+		PCV7=if_else(CODE=="90669",1,0),
+		PCV13=if_else(CODE=="90670",1,0))][
+	,.(N_PCV7=sum(PCV7),N_PCV13=sum(PCV13)), by=.(ENROLID)][
+	,.(ENROLID, N_PCV7, N_PCV13, 
+		PCV7_COHORT=if_else(N_PCV7%in%c(3,4) & N_PCV13==0, 1, 0),
+		PCV13_COHORT=if_else(N_PCV13%in%c(3,4) & N_PCV7==0, 1, 0))][
+	PCV7_COHORT==1 | PCV13_COHORT==1][
+	,.(ENROLID, PCV_COHORT=if_else(PCV7_COHORT==1,7,13))]
+
+
+# abx cumulatve: ------------------------------------------------------------- 
+rx_df_abx_pcv <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Inner-join to on 'pcvcohorts' to reduce to those in the pcv cohorts:
+	pcvcohorts,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		PCV_COHORT, 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumrx_df_abx_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumrx_df_abx_pcv <- rbind(cumrx_df_abx_pcv,
+		rx_df_abx_pcv[AGE_DAYS<=t,.(NRX=.N,AGE_DAYS_ROUNDED=t),by=.(PCV_COHORT)])
+}
+cumrx_df_abx_pcv <- cumrx_df_abx_pcv[
+	pcvcohorts[,.(NMEMB=.N),by=PCV_COHORT],
+	nomatch=0,on=.(PCV_COHORT)]
+
+cumrx_df_abx_pcv <- as_tibble(cumrx_df_abx_pcv)
+fig_cumrx_abx_pcv <- cumrx_df_abx_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NRX,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NRX+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NRX/NMEMB, col=factor(PCV_COHORT),fill=factor(PCV_COHORT))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		scale_y_continuous(breaks=seq(from=0, to=10, by=2)) + 
+		scale_color_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		scale_fill_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		theme_minimal() + 
+		theme(legend.title=element_blank()) + 
+		labs(x="Months from birth", y="Cumulative antibiotic prescriptions", col="PCV_COHORT", fill="PCV_COHORT")
+ggsave(fig_cumrx_abx_pcv, file="figures/under5/cumrx_abx_pcv.pdf",width=8,height=5)
+
+
+
+# otitis media: -------------------------------------------------------------- 
+visit_df_om_pcv <- visit_df[COND=="Otitis media"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Inner-join to on 'pcvcohorts' to reduce to those in the pcv cohorts:
+	pcvcohorts,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		PCV_COHORT, 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_om_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_om_pcv <- rbind(cumvisit_df_om_pcv,
+		visit_df_om_pcv[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(PCV_COHORT)])
+}
+cumvisit_df_om_pcv <- cumvisit_df_om_pcv[pcvcohorts[,.(NMEMB=.N),by=PCV_COHORT],nomatch=0,on=.(PCV_COHORT)]
+
+cumvisit_df_om_pcv <- as_tibble(cumvisit_df_om_pcv)
+fig_cumvisit_om_pcv <- cumvisit_df_om_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(PCV_COHORT),fill=factor(PCV_COHORT))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		scale_color_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		scale_fill_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative otitis media visits", col="PCV", fill="PCV")
+ggsave(fig_cumvisit_om_pcv, file="figures/under5/cumvisit_om_pcv.pdf",width=8,height=5)
+
+# uri: ----------------------------------------------------------------------- 
+visit_df_uri_pcv <- visit_df[COND=="URI (other)"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Inner-join to on 'pcvcohorts' to reduce to those in the pcv cohorts:
+	pcvcohorts,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		PCV_COHORT, 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_uri_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_uri_pcv <- rbind(cumvisit_df_uri_pcv,
+		visit_df_uri_pcv[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(PCV_COHORT)])
+}
+cumvisit_df_uri_pcv <- cumvisit_df_uri_pcv[pcvcohorts[,.(NMEMB=.N),by=PCV_COHORT],nomatch=0,on=.(PCV_COHORT)]
+
+cumvisit_df_uri_pcv <- as_tibble(cumvisit_df_uri_pcv)
+fig_cumvisit_uri_pcv <- cumvisit_df_uri_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(PCV_COHORT),fill=factor(PCV_COHORT))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		scale_color_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		scale_fill_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative URI visits", col="PCV", fill="PCV")
+ggsave(fig_cumvisit_uri_pcv, file="figures/under5/cumvisit_uri_pcv.pdf",width=8,height=5)
+
+# bronchitis: ---------------------------------------------------------------- 
+visit_df_bronch_pcv <- visit_df[COND=="Bronchitis (acute)"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Inner-join to on 'pcvcohorts' to reduce to those in the pcv cohorts:
+	pcvcohorts,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		PCV_COHORT, 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_bronch_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_bronch_pcv <- rbind(cumvisit_df_bronch_pcv,
+		visit_df_bronch_pcv[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(PCV_COHORT)])
+}
+cumvisit_df_bronch_pcv <- cumvisit_df_bronch_pcv[pcvcohorts[,.(NMEMB=.N),by=PCV_COHORT],,nomatch=0,on=.(PCV_COHORT)]
+
+cumvisit_df_bronch_pcv <- as_tibble(cumvisit_df_bronch_pcv)
+fig_cumvisit_bronch_pcv <- cumvisit_df_bronch_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(PCV_COHORT),fill=factor(PCV_COHORT))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		scale_color_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		scale_fill_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative acute bronchitis visits", col="PCV", fill="PCV")
+ggsave(fig_cumvisit_bronch_pcv, file="figures/under5/cumvisit_bronch_pcv.pdf",width=8,height=5)
+
+# other: ---------------------------------------------------------------- 
+visit_df_other_pcv <- visit_df[is.na(COND)][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Inner-join to on 'pcvcohorts' to reduce to those in the pcv cohorts:
+	pcvcohorts,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		PCV_COHORT, 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_other_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_other_pcv <- rbind(cumvisit_df_other_pcv,
+		visit_df_other_pcv[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(PCV_COHORT)])
+}
+cumvisit_df_other_pcv <- cumvisit_df_other_pcv[pcvcohorts[,.(NMEMB=.N),by=PCV_COHORT],,nomatch=0,on=.(PCV_COHORT)]
+
+cumvisit_df_other_pcv <- as_tibble(cumvisit_df_other_pcv)
+fig_cumvisit_other_pcv <- cumvisit_df_other_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(PCV_COHORT),fill=factor(PCV_COHORT))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		scale_color_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		scale_fill_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative 'other' visits", col="PCV", fill="PCV")
+ggsave(fig_cumvisit_other_pcv, file="figures/under5/cumvisit_other_pcv.pdf",width=8,height=5)
+
+
+# SSTI: ---------------------------------------------------------------- 
+visit_df_ssti_pcv <- visit_df[COND=="SSTI"][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,nomatch=0,on=.(ENROLID)][
+	# Inner-join to on 'pcvcohorts' to reduce to those in the pcv cohorts:
+	pcvcohorts,nomatch=0,on=.(ENROLID)][
+	# Extract ENROLID, birth year, and age (in days) for each rx:
+	,.(ENROLID, 
+		PCV_COHORT, 
+		AGE_DAYS=as.numeric(difftime(DATE,BIRTH_DATE,units="days")))]
+
+cumvisit_df_ssti_pcv <- setDT(data.frame())
+for(t in seq(from=0, to=30*60, by=30)){
+	cumvisit_df_ssti_pcv <- rbind(cumvisit_df_ssti_pcv,
+		visit_df_ssti_pcv[AGE_DAYS<=t,.(NVISITS=.N,AGE_DAYS_ROUNDED=t),by=.(PCV_COHORT)])
+}
+cumvisit_df_ssti_pcv <- cumvisit_df_ssti_pcv[pcvcohorts[,.(NMEMB=.N),by=PCV_COHORT],,nomatch=0,on=.(PCV_COHORT)]
+
+cumvisit_df_ssti_pcv <- as_tibble(cumvisit_df_ssti_pcv)
+fig_cumvisit_ssti_pcv <- cumvisit_df_ssti_pcv %>% 
+	mutate(lwr=qgamma(alphasig/2,NVISITS,1)/NMEMB) %>%
+	mutate(upr=qgamma(1-alphasig/2,NVISITS+1,1)/NMEMB) %>%
+	ggplot(aes(x=AGE_DAYS_ROUNDED/30, y=NVISITS/NMEMB, col=factor(PCV_COHORT),fill=factor(PCV_COHORT))) + 
+		geom_ribbon(aes(ymin=lwr,ymax=upr),alpha=0.4) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=60, by=12)) + 
+		scale_color_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		scale_fill_manual(values=c("7"="red","13"="blue"), labels=c("7"="PCV7","13"="PCV13")) + 
+		theme_minimal() + 
+		labs(x="Months from birth", y="Cumulative acute SSTI visits", col="PCV", fill="PCV")
+ggsave(fig_cumvisit_ssti_pcv, file="figures/under5/cumvisit_ssti_pcv.pdf",width=8,height=5)
+
+
+# =============================================================================
+# Time series of PCV shift 
+# =============================================================================
+
+# Proportion of pneumococcal vaccines given in 2008-2012 for this cohort: 
+
+fig_pcvuptake <- vax_df[CODE%in%c("90669","90670")][
+	DATE<ymd("2014-01-01")][
+	,.(IS_PCV7=if_else(CODE=="90669",1,0),
+		DT_MONTH=month(DATE), 
+		DT_YEAR=year(DATE))][
+	,.(PROP_PCV7=sum(IS_PCV7)/.N),by=.(DT_MONTH,DT_YEAR)] %>%
+	as_tibble() %>%
+	arrange(DT_YEAR, DT_MONTH) %>%
+	mutate(DATE=ymd(paste0(DT_YEAR,"-",DT_MONTH,"-","01"))) %>%
+	mutate(PROP_PCV13=1-PROP_PCV7) %>% 
+	select(DATE, PROP_PCV7, PROP_PCV13) %>% 
+	pivot_longer(c("PROP_PCV7","PROP_PCV13")) %>%
+	mutate(name=factor(name, levels=c("PROP_PCV7","PROP_PCV13"))) %>% 
+	ggplot(aes(x=DATE, y=value, col=name)) + 
+		geom_point() + 
+		geom_line() + 
+		scale_color_manual(labels=c("PROP_PCV7"="PCV7","PROP_PCV13"="PCV13"), values=c("PROP_PCV7"="red","PROP_PCV13"="blue")) +  
+		labs(x="Month", y="Proportion of pneumococcal vaccines") + 
+		theme_minimal() + 
+		theme(legend.title=element_blank())
+ggsave(fig_pcvuptake, file="figures/under5/pcvuptake.pdf",width=8,height=5)
+
+
+
+
+# =============================================================================
+# Gini coefficient
+# =============================================================================
+
+# abx cumulatve: ------------------------------------------------------------- 
+ginicoef_df <- rx_df[
+	# Inner-join to on 'antibiotics' to pull out abx prescriptions:
+	antibiotics[,.(NDCNUM)],nomatch=0,on=c(CODE="NDCNUM")][
+	# Inner-join to on 'memb_df' to grab demographic information:
+	memb_df,on=.(ENROLID)][
+	,.(ENROLID,
+		BIRTH_YEAR=year(BIRTH_DATE), 
+		NRX=ifelse(is.na(ID),0,1))][
+	,.(BIRTH_YEAR=first(BIRTH_YEAR), NRX=sum(NRX)), by=.(ENROLID)] %>%
+	as_tibble() %>%
+	arrange(BIRTH_YEAR, NRX) %>% 
+	group_by(BIRTH_YEAR) %>% 
+	mutate(RANK=1:n(), PRANK=RANK/max(RANK), CUMRX=cumsum(NRX), PCUMRX=CUMRX/max(CUMRX))
+
+fig_ginicoef <- ginicoef_df %>% 
+	ggplot(aes(x=PRANK, y=PCUMRX, col=factor(BIRTH_YEAR))) + 
+		geom_line() + 
+		scale_x_continuous(breaks=seq(from=0, to=1, by=0.2), minor_breaks=seq(from=0, to=1, by=0.1)) + 
+		scale_y_continuous(breaks=seq(from=0, to=1, by=0.2), minor_breaks=seq(from=0, to=1, by=0.1)) + 
+		theme_minimal() + 
+		labs(x="Cumulative share of children, ranked by\ntotal antibiotics received (lowest to highest)", y="Cumulative share of all antibiotics prescribed", col="Birth year") + 
+		geom_segment(x=0, y=0, xend=1, yend=1, lty="dashed", col="black")
+
+
+ggsave(fig_ginicoef, file="figures/under5/ginicoef.pdf",width=8,height=5)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# temp %>% 
+# 	group_by(BIRTH_YEAR) %>% 
+# 	summarise(NRX=sum(NRX), 
+# 		NRX_WITH08VISITS=sum(NRX_WITH08VISITS),
+# 		NRX_WITH08PRESCRIBING=sum(NRX_WITH08PRESCRIBING)) %>% 
+# 	pivot_longer(c("NRX","NRX_WITH08VISITS","NRX_WITH08PRESCRIBING")) %>% 
+# 	mutate(name=case_when(name=="NRX"~"Actual prescriptions",
+# 		name=="NRX_WITH08PRESCRIBING"~"Prescriptions assuming actual visits,\n2008 prescribing rate",
+# 		name=="NRX_WITH08VISITS"~"Prescriptions assuming 2008 visits,\nactual prescribing rate")) %>%
+# 	mutate(name=factor(name, levels=c(
+# 		"Actual prescriptions",
+# 		"Prescriptions assuming actual visits,\n2008 prescribing rate",
+# 		"Prescriptions assuming 2008 visits,\nactual prescribing rate"))) %>%
+# 	ggplot(aes(x=BIRTH_YEAR, y=value, col=name)) + 
+# 		geom_point() + 
+# 		geom_line() + 
+# 		scale_color_manual(values=c("black","blue","red")) + 
+# 		labs(x="Birth year", y="Antibiotic prescriptions by age 5")
+
+# limits=c(NRX="Actual prescriptions",NRX_WITH08PRESCRIBING="Actual visits, 2008 prescribing rate",NRX_WITH08VISITS="2008 visits, actual prescribing rate"),
+
+
+# =============================================================================
+# A second try that's prescription-centric
+# =============================================================================
+
+# visit_df[,.(COND, VISIT_ID=ID)][
+# 	rx_df, on=c(VISIT_ID="ASSOC_VISIT_ID")][
+# 	,.(ENROLID, RX_ID=ID, DATE, CODE, VISIT_ID, COND)]
+
+# =============================================================================
+# Looking at just otitis and uris: 
+# =============================================================================
+
+# rx_visit_counts %>% 
+
+
+
+# # =============================================================================
+# # Get visit conditions
+# # =============================================================================
+
+# setDT(DTtoindex_0)
+# dxsummary <- visit_df[!is.na(COND)][
+# 	,.(COND=COND, DT_MONTH=month(DATE),DT_YEAR=year(DATE))][
+# 	,.(NVISITS=.N),by=.(COND,DT_MONTH,DT_YEAR)]
+# dxsummary <- DTtoindex_0[dxsummary, on=.(DT_MONTH,DT_YEAR)]
+
+# dxsummaryfig <- ggplot(dxsummary[COND %in% c("Otitis media", "Bronchitis (acute)")], aes(x=INDEX, y=NVISITS, col=COND)) + 
+# 	geom_point() + 
+# 	geom_line(alpha=0.4)
+
+# ggsave(dxsummaryfig, file="figures/dxsummaryfig.pdf")
+
+# # =============================================================================
+# # Compare cumulative otitis media vs strep pharyngitis
+# # =============================================================================
+
+# nmembpercohort <- memb_df[,.(ENROLID=ENROLID, COHORT=year(BIRTH_DATE))][
+# 	,.(NMEMB=.N), by=.(COHORT)]
+
+# casespermonth <- memb_df[,.(ENROLID,BIRTH_DATE)][
+# 	visit_df[!is.na(COND),.(ENROLID,COND,DATE)], on=.(ENROLID)][
+# 	,.(COND,
+# 		MONTH=floor(as.numeric(difftime(DATE,BIRTH_DATE,units="days"))/30), 
+# 		COHORT=year(BIRTH_DATE))][
+# 	,.(NVISITS=.N),by=.(COHORT,COND,MONTH)
+# 	]
+
+# casespermonth <- nmembpercohort[casespermonth, on=.(COHORT)]
+
+# casespermonth <- as_tibble(casespermonth) 
+# casespermonth <- casespermonth %>% 
+# 	arrange(COHORT,COND,MONTH) %>% 
+# 	group_by(COHORT,COND) %>%
+# 	mutate(CUMNVISITS=cumsum(NVISITS))
+
+# figcumcond <- casespermonth %>% 
+# 	filter(COND %in% c("Otitis media", "Bronchitis (acute)")) %>% 
+# 	ggplot(aes(x=MONTH, y=CUMNVISITS/NMEMB, col=factor(COHORT), lty=COND)) + 
+# 		# geom_point(size=0.1) + 
+# 		geom_line() + 
+# 		labs(x="Month",y="Cumulative visits per person", col="Cohort", lty="Condition")
+# ggsave(figcumcond, file="figures/cumcond.pdf")
+
+# # =============================================================================
+# # Plot prescriptions per visit for otitis? 
+# # =============================================================================
+
+# temp <- memb_df[,.(ENROLID,BIRTH_DATE)][
+# 		rx_df[,.(ASSOC_VISIT_ID, CODE)][
+# 		visit_df[COND=="Otitis media"], on=.(ASSOC_VISIT_ID==ID)][
+# 		,.(ENROLID,DATE,CODE)],
+# 	on=.(ENROLID)][
+# 	,.(MONTH=floor(as.numeric(difftime(DATE,BIRTH_DATE,units="days"))/30), COHORT=year(BIRTH_DATE),
+# 		HASRX=ifelse(is.na(CODE),0,1))][
+# 	,.(NVISITS=.N, NRX=sum(HASRX)), by=.(COHORT,MONTH)][
+# 	,.(COHORT=COHORT, MONTH=MONTH, PRX=NRX/NVISITS)]
+
+# figtemp <- as_tibble(temp) %>% 
+# 	ggplot(aes(x=MONTH, y=PRX, col=factor(COHORT))) + 
+# 		geom_line() 
+# ggsave(figtemp, file="figures/temp.pdf")
+
+
+
+
