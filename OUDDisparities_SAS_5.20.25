@@ -1,0 +1,1825 @@
+libname share "G:\Share"; 
+libname jyk 'G:\data'; 
+
+%global state; 
+%let state=PA; /*PLEASE CHANGE THE STATE VALUE TO YOUR STATE (2-letter abbreviation)*/
+
+*%let path1="G:\JooYeon\Multistate Opioid\MODRN_disparities_descriptive_03282023_&state..xlsx";/*PLEASE KEEP THE FILE NAME AND CHANGE THE PATHWAY TO WHERE YOU WANT TO SAVE THE RESULT FILE*/
+*%let path2=G:\JooYeon\data\;/*PLEASE CHANGE THE PATHWAY TO WHERE YOU WANT TO SAVE THE ANALYTIC DATA SETS FOR STATISTICAL ANALYSES IN STATA*/
+
+
+/*UPDATED NDC codes for MOUD*/
+proc import out=ndc datafile="G:\JooYeon\data\MODRN_MOUD_plus_NQF3175_2021ver_new_type.xlsx" /*PLEASE CHANGE THE PATHWAY ACCORDINGLY*/
+			dbms=xlsx replace;
+	sheet="NDC";
+	getnames=yes;
+run;
+*445;
+
+/*UPDATED HCPCS/CPT codes for MOUD*/
+proc import out=MOUD_proc datafile="G:\JooYeon\data\MODRN_MOUD_plus_NQF3175_2021ver_new_type.xlsx" /*PLEASE CHANGE THE PATHWAY ACCORDINGLY*/
+			dbms=xlsx replace;
+	sheet="HCPCS";
+	getnames=yes;
+run;
+*20;
+
+proc import out=RUCA datafile="G:\JooYeon\data\RUCA2010zipcode_08172020.xlsx" /*PLEASE CHANGE THE PATHWAY ACCORDINGLY. This file is saved in: Box > MultiState Medicaid OUD > Derived Enrollee Characteristics*/
+			dbms=xlsx replace;
+	sheet="Data";
+	getnames=yes;
+run;
+
+/*ICD-10 diagnosis codes for SUDs*/
+proc import out=sud datafile="G:\JooYeon\data\MACPAC SUD_codes_no_nicotine_tobacco_no_poisoning_July2021.xlsx" /*PLEASE CHANGE THE PATHWAY ACCORDINGLY*/
+			dbms=xlsx replace;
+	sheet="SUD ICD CM codes_NEW";
+	getnames=yes;
+run;
+*453;
+
+proc import out=HEDIS_value_sets datafile="G:\JooYeon\data\2019-Adult-HEDIS-VSD_codes_only.xlsx" /*PLEASE CHANGE THE PATHWAY ACCORDINGLY*/
+			dbms=xlsx replace;
+	sheet="Adult Value Sets to Codes";
+	getnames=yes;
+run;
+*Note that there is no change in the following value sets in 2021 version: Inpatient Stay, ED;
+
+/*ICD-10 diagnosis codes for opioid-related overdose*/
+proc import out=opioid_poisoning datafile="G:\JooYeon\data\opioid_overdose_poisoning_Green.xlsx" /*PLEASE CHANGE THE PATHWAY ACCORDINGLY*/
+			dbms=xlsx replace;
+	sheet="opioid_overdose_Green";
+	getnames=yes;
+run;
+*91;
+
+
+/*create opioid poisoning/overdose (OD) diagnosis code list*/
+%let od =;
+data _null_;
+ set opioid_poisoning;
+ call symput('od',trim(resolve('&od'))||' "'||trim(code)||'"');
+ run;
+%put &od;
+
+data ED; /*CPT and UBREV*/
+	set HEDIS_value_sets (keep=Value_Set_Name Code_System code2 rename=(code2=code));
+	if Value_Set_Name='ED';
+	drop Value_Set_Name;
+run; 
+
+/*create ED code lists: PROC_CODE and REV_CODE separately*/
+%let edproclist =;
+data _null_;
+ set ed (where=(Code_System='CPT'));
+ call symput('edproclist',trim(resolve('&edproclist'))||' "'||trim(code)||'"');
+ run;
+%put &edproclist;
+
+%let edrevlist =;
+data _null_;
+ set ed (where=(Code_System='UBREV'));
+ call symput('edrevlist',trim(resolve('&edrevlist'))||' "'||trim(code)||'"');
+ run;
+%put &edrevlist;
+
+data IP; /*UBREV*/
+	set HEDIS_value_sets (keep=Value_Set_Name Code_System code2 rename=(code2=code));
+	if Value_Set_Name='Inpatient Stay';
+	drop Value_Set_Name;
+run;
+
+/*create IP code lists: REV_CODE*/
+%let IPrevlist =;
+data _null_;
+ set IP (where=(Code_System='UBREV'));
+ call symput('IPrevlist',trim(resolve('&IPrevlist'))||' "'||trim(code)||'"');
+ run;
+%put &IPrevlist;
+
+data sud;
+	set sud;
+	if remission=1 or diag in: ('F11') then delete;
+run;
+*393;
+
+%let sud=;
+data _null_;
+ set sud;
+ call symput('sud',trim(resolve('&sud'))||' "'||trim(diag)||'"');
+ run;
+%put &sud;/*DIAG*/
+
+
+
+proc format;
+	value $missfmt ' '='Missing' other='Not Missing';
+	value missfmt .='Missing' other='Not Missing';
+run;
+
+proc format;
+	value race_ethfmt 1 = 'Non-Hispanic white'
+       		          2 = 'Non-Hispanic black'
+                      3 = 'Hispanic'
+                      4 = 'Others'
+					  5 = 'Unknown/Missing';
+run;
+
+proc format;
+	value $elig_catfmt
+	'1'=  'Partial benefit non-dual'
+	'2a'= 'Full benefit dual'
+	'2b'= 'Partial benefit dual, QMB-only'
+	'2c'= 'Partial benefit dual, non-QMB'
+	'2'=  'Dual (unable to categorize further)'
+	'3'=  'Disabled'
+	'4'=  'Children'
+	'5'=  'Expansion adults'
+	'6'=  'Non-disabled adults/Pregnancy';
+run;
+
+proc format;
+	value	age_gp  	1 =  ' 12-20 ' 
+						2 =  ' 21-34 ' 
+						3 =  ' 35-44 ' 
+						4 =  ' 45-54 '
+						5 =  ' 55-64 ' 
+						;
+run;
+
+proc format;
+	value	area_fmt  	0 =  'Urban' 
+						1 =  'Rural' 
+						2 =  'Missing Category';
+run;
+
+proc format;
+	value typefmt 	1 = 'Oral Buprenorphine or Buprenorphine/naloxone'
+       		        2 = 'Oral Methadone'
+                    3 = 'Oral Naltrexone'
+					4 = 'IM Naltrexone'
+					5 = 'IM Buprenorphine'
+					6 = 'Implant Buprenorphine'
+					7 = 'Implant Naltrexone'
+					8 = 'Patch Buprenorphine';
+run;
+/*
+proc format;
+	value typefmt 	1 = 'Buprenorphine or Buprenorphine/naloxone'
+       		        2 = 'Methadone'
+                    3 = 'Naltrexone'
+					4 = 'IM Naltrexone';
+run;
+*/
+
+%macro prelim (lib=, yr=);
+
+/*monthly observations for enrollees age 12-64, full-benefit, non-dual*/
+/*
+proc sql;
+	create table enrl_FBND_monthly_&yr. as
+	select distinct enrl_id, month, dob, race_ethnic format race_ethfmt., elig_cat format $elig_catfmt., &yr. as year
+	from &lib..Mcdm_2_0_enrl_monthly_&yr. (keep=ENRL_ID MONTH DOB RACE_ETHNIC ELIG_CAT)
+	where (("31Dec&yr."d-dob)/365.25)<65 and (("01Jan&yr."d-dob)/365.25)>=12 and elig_cat in ('3','4','5','6');
+quit;
+*/
+
+/*annual observations non-dual, full-benefit Medicaid enrollees who are 12-64 years of age for the duration of the year*/
+proc sql;
+	create table enrl_&yr. as
+	select distinct ENRL_ID, DOB, DOD, RACE_ETHNIC format race_ethfmt., ELIG_CAT format $elig_catfmt., GENDER, ZIP5, &yr. as year
+	from &lib..Mcdm_2_0_enrl_&yr. (keep=ENRL_ID DOB DOD RACE_ETHNIC ELIG_CAT GENDER ZIP5)
+	where (("31Dec&yr."d-dob)/365.25)<65 and (("01Jan&yr."d-dob)/365.25)>=12 and elig_cat in ('3','4','5','6');
+quit;
+
+data enrl_&yr.;
+	set enrl_&yr.;
+	age=(("31Dec&yr."d-dob)/365.25);
+
+	if 12<=age<21 then age_gp=1;
+	else if 21<=age<35 then age_gp=2;
+	else if 35<=age<45 then age_gp=3;
+	else if 45<=age<55 then age_gp=4;
+	else if 55<=age<65 then age_gp=5;
+
+	if dod^=. and year(DOD)<&yr. then delete; /*data error*/
+
+	format age_gp age_gp.;
+run;
+
+/*DEFINE RURAL vs URBAN*/
+proc sql;
+	create table enrl_&yr._ as
+	select a.*, b.RUCA1 as RUCA_primary, case when (RUCA1 in (1,2,3)) then 0 else case when (RUCA1 in (99,.)) then 2 else 1 end end as rural format area_fmt.
+	from enrl_&yr. as a left join ruca as b
+	on a.zip5=b.ZIP_CODE
+	where enrl_id in (select enrl_id from ENRL_&yr.);
+quit;
+
+
+/*subset claims & pharm data to those in enrl FBND monthly*/
+proc sql;
+	create table clm_&yr. as
+	select *
+	from &lib..Mcdm_2_0_clm_&yr. (keep=CLM_ID DETAIL_NUMBER enrl_id dos: diag: proc_code mod: IP rev_code: POS);
+quit;
+
+proc sql;
+	create table pharm_&yr. as
+	select *
+	from &lib..Mcdm_2_0_pharm_&yr. (keep=CLM_ID DETAIL_NUMBER enrl_id dos days_supply ndc);
+quit;
+
+
+
+
+/*identify MOUD claims based on NDC. Pharmacy claims for medications with negative, missing, or zero days  supply were not included.*/
+proc sql;
+	create table moud_ndc_&yr. as
+	select a.clm_id, a.detail_number, a.enrl_id, a.dos, a.days_supply, b.type format typefmt., a.dos+a.days_supply-1 as dos_end format date9.
+	from pharm_&yr. as a, ndc as b
+	where a.ndc=b.ndc and a.days_supply>0;
+quit;
+
+data moud_ndc_&yr.;
+	set moud_ndc_&yr.;
+
+	if type in (4, 5) then do;
+		dos_end=dos+29;/*Naltrexone and buprenorphine injections contribute 30 days  supply*/
+		days_supply=30;
+	end;
+
+	if type=6 then do;
+		dos_end=dos+179;/*buprenorphine implants contribute 180 days  supply*/
+		days_supply=180;
+	end;
+run;
+
+/*identify MOUD claims based on PROC_CODE*/
+proc sql;
+	create table moud_proc_&yr. as
+	select a.clm_id, a.detail_number, a.enrl_id, a.dos_start, a.dos_end, a.proc_code, b.type format typefmt., b.days_supply
+	from clm_&yr. (keep=CLM_ID DETAIL_NUMBER enrl_id dos_start dos_end proc_code) as a, MOUD_proc as b
+	where a.proc_code=b.HCPCS_Code
+	order by a.enrl_id, a.dos_start, a.dos_end;
+quit;
+
+data moud_proc_&yr.;
+	set moud_proc_&yr.;
+	if days_supply=. then days_supply=dos_end-dos_start+1;
+	if days_supply^=. then dos_end=dos_start+days_supply-1;
+run;
+
+/*All MOUD encounters*/
+data MOUD_&yr.;
+	set moud_ndc_&yr. (rename=(dos=dos_start)) moud_proc_&yr.;
+	if type in (1,5,6,8) then BUP=1;
+	if type=2 then MTD=1;
+	if type=3 then NALTREX_ORAL=1;
+	if type in (4,7) then NALTREX_IM=1;
+run;
+
+proc sql;
+	create table any_MOUD_&yr. as
+	select distinct enrl_id, 1 as MOUD, max(BUP) as BUP, max(MTD) as MTD, max(NALTREX_ORAL) as NALTREX_ORAL, max(NALTREX_IM) as NALTREX_IM
+	from MOUD_&yr.
+	group by enrl_id;
+quit;
+
+/*ENROLLMENT PERIODS*/
+
+proc sql;
+	create table ENRL_period_&yr. as
+	select *
+	from &lib..Mcdm_2_0_enrl_&yr. (keep=ENRL_ID b_date: e_date:)
+	order by ENRL_ID;
+quit;
+
+proc transpose data=ENRL_period_&yr. out=long1_&yr. prefix=b_date;
+   	by enrl_id;
+	var b_date:;
+run;
+
+proc transpose data=ENRL_period_&yr. out=long2_&yr. prefix=e_date;
+   	by enrl_id;
+	var e_date:;
+run;
+
+/*each enrolled period in a long format*/
+data ENRL_period_&yr._long;
+   merge long1_&yr. (rename=(b_date1=b_date) keep=enrl_id b_date1) long2_&yr. (rename=(e_date1=e_date) keep=enrl_id e_date1);
+   by enrl_id;
+run;
+
+data ENRL_period_&yr._long;
+	set ENRL_period_&yr._long;
+	if b_date=. and e_date=. then delete;
+run;
+
+******************************************;
+
+proc sort data=ENRL_period_&yr._long;
+	by enrl_id b_date e_date;
+run;
+
+/*identify continuously enrolled segments*/
+data ENRL_period_&yr._long_; 
+	set ENRL_period_&yr._long; 
+		by enrl_id; 
+retain new_b_date new_e_date;
+ 
+	if first.enrl_id then do;
+		new_b_date = b_date;
+		new_e_date = e_date;
+	end; 
+
+	if (b_date le (new_e_date + 1)) then do;
+		b_date = new_b_date;
+		new_e_date = e_date;
+	end;
+
+	else do;
+		new_b_date = b_date;
+		new_e_date = e_date;
+	end;
+	
+	format new_b_date date9. new_e_date date9.;
+run;
+
+proc sort data=ENRL_period_&yr._long_; 
+	by enrl_id b_date;
+run;
+
+data ENRL_period_&yr._long__;
+	set ENRL_period_&yr._long_; 
+		by enrl_id b_date;
+
+	if last.b_date then output;
+run;
+
+data ENRL_period_&yr._long__;
+	set ENRL_period_&yr._long__;
+	cont_enrl=1;
+	drop new_b_date new_e_date;
+run;
+
+data ENRL_period_&yr._long__;
+	set ENRL_period_&yr._long__;
+	days_enrolled=e_date-b_date+1;
+run;
+
+proc sql;
+	create table days_enrolled&yr. as
+	select distinct enrl_id, sum(days_enrolled) as days_enrolled
+	from ENRL_period_&yr._long__
+	group by enrl_id;
+quit;
+******************************************;
+
+
+
+/*Identify claims with with a diagnosis of OUD, overdose, comorbidities*/
+data OUD_&yr. (keep=enrl_id dos_start oud)
+	 OD_&yr. (keep=enrl_id dos_start od)
+	 comor_&yr. (keep=enrl_id dos_start anxiety: mood: schizo: PTSD other_SUD alcohol cannabis cocaine amp_type_stimulant other_psychoactive any_other_SUD);
+	set clm_&yr. (keep=enrl_id dos: diag:);
+
+
+	array	Diag $ diag:;
+		do	I = 1 to dim(diag);
+			if	Diag(i) in: ('F11') 										then	OUD =1;
+			if	Diag(i) in (&od.) 											then	OD =1;
+			if	Diag(i) in (&sud.) 											then	other_SUD =1;
+			if	Diag(i) in: ('F10') 																then	alcohol =1;
+			if	Diag(i) in: ('F12') 																then	cannabis =1;
+			if	Diag(i) in: ('F14') 																then	cocaine=1;
+			if	Diag(i) in: ('F15') 																then	amp_type_stimulant =1;
+			if	Diag(i) in: ('F19') 																then	other_psychoactive =1;
+
+			if	Diag(i) in: ('F13','O','F16','F18','F55') 											then	any_other_SUD=1;
+
+If Diag(i) in ( 'F064', 'F4000', 'F4001', 'F4002', 'F4010', 'F4011', 'F40210', 'F40218', 'F40220', 'F40228', 'F40230', 'F40231', 'F40232', 'F40233', 'F40240', 'F40241', 'F40242', 'F40243', 'F40248', 'F40290', 'F40291', 'F40298', 'F408', 'F409', 'F410', 'F411', 'F413', 'F418', 'F419', 'F42', 'F430', 'F4310', 'F4311', 'F4312', 'F449', 'F458', 'F488', 'F489', 'F938', 'F99', 'R452', 'R455', 'R456', 'R457') 	
+then anxiety_disorder =1; 
+
+If Diag(i) in ('F320', 'F321', 'F322', 'F323', 'F324', 	'F325', 	'F329', 	'F330', 	'F331', 	'F332', 	'F333', 	'F3340', 'F3341', 'F3342', 'F339', 'F341', 'F3010', 'F3011', 'F3012', 'F3013', 'F302', 'F303', 	'F304', 	'F308', 	'F309', 'F310', 	'F3110', 'F3111', 'F3112', 'F3113', 'F312', 'F3130', 'F3131', 'F3132', 'F314', 'F315', 	'F3160', 'F3161', 'F3162', 'F3163', 'F3164', 'F3170', 'F3171', 'F3172', 'F3173', 'F3174', 'F3175', 'F3176', 'F3177', 'F3178', 'F3181', 'F3189', 'F319', 'F328', 	'F338', 'F348', 'F349', 'F39', 'F0630') 		
+then mood_disorder =1; 
+
+if  Diag(i) in ('F060', 'F062','F200','F201',	'F202',	'F203',	'F205',	'F2081',	'F2089',	 'F209',	'F22','F23', 'F24','F250', 'F251','F258','F259',	'F28','F29','F323','F333',	'F4489') 	
+then schizo_other_psych=1; 
+
+if  Diag(i) in ('F4310', 'F4311', 'F4312')	
+then PTSD=1; 
+
+		end;
+		drop I;
+
+	if  OUD=1 then output OUD_&yr.;
+	if  OD=1 then output OD_&yr.;
+	if anxiety_disorder=1 or mood_disorder=1 or schizo_other_psych=1 or PTSD=1 or other_SUD=1 then output comor_&yr.;
+run;
+
+proc sql;
+	create table OD_summ&yr. as
+	select distinct enrl_id, max(od) as OD, count(distinct dos_start) as N_OD
+	from OD_&yr.
+	where year(dos_start)=&yr.
+	group by enrl_id;
+quit;
+
+proc sql;
+	create table comor_summ&yr. as
+	select distinct enrl_id, max(anxiety_disorder)>0 as anxiety_disorder, max(mood_disorder)>0 as mood_disorder, max(schizo_other_psych)>0 as schizo_other_psych, max(PTSD)>0 as PTSD,
+			max(other_SUD) as other_SUD, max(alcohol) as alcohol, max(cannabis) as cannabis, max(cocaine) as cocaine, max(amp_type_stimulant) as amp_type_stimulant,
+							max(other_psychoactive) as other_psychoactive, max(any_other_SUD) as any_other_SUD
+	from comor_&yr.
+	where year(dos_start)=&yr.
+	group by enrl_id;
+quit;
+
+/*Identify location of OUD diagnosis*/
+data clm_OUD_&yr. (drop=rev_code:);
+	set clm_&yr.;
+
+		array	Diag $ diag:;
+		do	I = 1 to dim(diag);
+			if	Diag(i) in: ('F11') 										then	OUD =1;
+		end;
+		drop I;
+
+	array	Mod $ mod:;
+		do	J = 1 to dim(mod);
+		  	if	mod(j) in ('GT') 										then	MOD_GT =1;
+			if	mod(j) in ('UB') 										then	MOD_UB =1;
+			if	mod(j) in ('CR') 										then	MOD_CR =1;
+			if	mod(j) in ('FP') 										then	MOD_FP =1;
+			if	mod(j) in ('95') 										then	MOD_95 =1;
+			if	mod(j) in ('GQ') 										then	MOD_GQ =1;
+			if	mod(j) in ('GY') 										then	MOD_GY =1;
+			if	mod(j) in ('TH') 										then	MOD_TH =1;
+			if	mod(j) in ('TG', 'TF') 									then	MOD_TGTF =1;
+			if	mod(j) in ('U1','U2','U3','U4','U5','U6') 				then	MOD_U1U6 =1;
+			if	mod(j) in ('U8') 										then	MOD_U8 =1;
+			if	mod(j) in ('G0') 										then	MOD_G0 =1;
+			if	mod(j) in ('EP') 										then	MOD_EP =1;
+
+			if	mod(j) in ('HA') 										then	MOD_HA =1;
+			if	mod(j) in ('HQ') 										then	MOD_HQ =1;
+			if	mod(j) in ('HT') 										then	MOD_HT =1;
+			if	mod(j) in ('HI') 										then	MOD_HI =1;
+			if	mod(j) in ('GT','HO','HF','HN','U1','HM') 				then	MOD_NC1 =1;
+			if	mod(j) in ('HI','HM','HQ','TL','UI') 					then	MOD_NC2 =1;
+
+			if	mod(j) in ('DR') 										then	MOD_DR =1;
+
+			if	mod(j) in ('HF') 										then	MOD_HF =1;
+			if	mod(j) in ('U5') 										then	MOD_U5 =1;
+			if	mod(j) in ('TS') 										then	MOD_TS =1;
+
+		end;
+		drop J;
+
+	array	rev_code $ rev_code:;
+		do	K = 1 to dim(rev_code);
+			if  rev_code(k) in ('0780','0789') 	then	REV_req_WV =1;
+			if  rev_code(k) in ('0780') 		then	REV_req_KY =1;
+			if  rev_code(k) in ('0900','0906','0912','0913','0914','0915','0916','0919') 		then	REV_req_MI =1;
+
+			if rev_code(k) in  (&edrevlist.)								then	ED=1;
+			if rev_code(k) in  (&IPrevlist.)								then	inpatient=1;
+		end;
+		drop K;
+
+	if proc_code in (&edproclist.) 											then ED=1;
+
+	/*Harvard outpatient definition: POS*/
+	if pos in ('02', '11', '12', '21', '22', '24', '25', '49', '50', '51', '55', '56', '61', '62', '65', '71')	then OP=1;
+
+	/*Harvard outpatient definition: CPT*/
+	if proc_code in ('00104', '0901', '0911', '9424', '9426', '9427', '90791', '90792', '90801', '90802',
+					 '90804', '90805', '90806', '90807', '90808', '90809', '90810', '90811', '90812', '90813',
+					 '90814', '90815', '90820', '90832', '90833', '90834', '90835', '90836', '90837', '90838',
+					 '90839', '90840', '90842', '90843', '90844', '90845', '90846', '90847', '90848', '90849',
+					 '90853', '90855', '90857', '90862', '90865', '90867', '90868', '90869', '90870', '90871',
+					 '90875', '90876', '90880', '90900', '90901', '90902', '90904', '90906', '90908', '90910',
+					 '96372', '97003', '97004', '98960', '98961', '98962', '99058', '99078', '99201', '99202',
+					 '99203', '99204', '99205', '99211', '99212', '99213', '99214', '99215', '99241', '99242',
+					 '99243', '99244', '99245', '99341', '99342', '99343', '99344', '99345', '99347', '99348',
+					 '99349', '99350', '99382', '99383', '99384', '99385', '99386', '99387', '99392', '99393',
+					 '99394', '99395', '99396', '99397', '99401', '99402', '99403', '99404', '99404', '99408',
+					 '99409', '99411', '99412', '99420', '99490', '99495', '99496', '99510', '0359T', '0360T',
+					 '0361T', '0362T', '0363T', '0364T', '0365T', '0366T', '0367T', '0368T', '0369T', '0370T',
+					 '0371T', '0372T', '0373T', '0374T', 'G0071', 'G0072', 'G0073', 'G0074', 'G0075', 'G0076',
+					 'G0077', 'G0078', 'G0079', 'G0080', 'G0081', 'G0082', 'G0155', 'G0175', 'G0351', 'G0396',
+					 'G0397', 'G0442', 'G0443', 'G0463', 'G0466', 'G0467', 'G0469', 'G0470', 'G0505', 'G0507',
+					 'G0513', 'G0514', 'G0515', 'G2069', 'G2074', 'H0001', 'H0002', 'H0004', 'H0005', 'H0006',
+					 'H0007', 'H0014', 'H0016', 'H0020', 'H0022', 'H0023', 'H0028', 'H0029', 'H0031', 'H0033',
+					 'H0034', 'H0036', 'H0037', 'H0038', 'H0039', 'H0040', 'H0046', 'H0049', 'H0050', 'H1011',
+					 'H2000', 'H2001', 'H2010', 'H2011', 'H2013', 'H2014', 'H2015', 'H2016', 'H2017', 'H2018',
+					 'H2019', 'H2020', 'H2021', 'H2022', 'H2023', 'H2024', 'H2025', 'H2026', 'H2027', 'H2028',
+					 'H2029', 'H2030', 'H2031', 'H2032', 'H2033', 'H2037', 'H5010', 'H5020', 'H5025', 'H5030',
+					 'H5220', 'H5230', 'H5240', 'H5299', 'M0064', 'Q3014', 'S3005', 'S9110', 'S9127', 'S9454',
+					 'S9482', 'S9484', 'S9485', 'T1006', 'T1006', 'T1007', 'T1011', 'T1012', 'T1015', 'T1016',
+					 'T1017', 'T1018', 'T1023', 'T1024', 'T1025', 'T1026', 'T1027', 'T1040', 'T1041', 'T2010',
+					 'T2011', 'T2012', 'T2013', 'T2014', 'T2015', 'T2018', 'T2019', 'T2020', 'T2021', 'T2022',
+					 'T2023', 'T2034', 'T2036', 'T2037', 'Z0001', 'Z0002', 'Z0002')		then OP=1;
+
+	/*Additional outpatient POS*/
+	if pos in ('15', '57', '58', '72')	then OP=1;
+
+	/*HCPCS codes for MOUD are considered as outpatient*/
+	if proc_code in ('H0020', 'J0571', 'J0572', 'J0573', 'J0574', 'J0575', 'J2315',
+					'G2067', 'G2078', 'G2068', 'G2069', 'G2070', 'G2072', 'G2079', 'J0570', 'J0592', 'Q9991', 'Q9992', 'G2073', 'G2075') then OP=1;
+
+	if OUD =1 then output;
+
+run;
+
+data clm_OUD_&yr._;
+	set clm_OUD_&yr.;
+ 
+	if proc_code in ('99441', '99442', '99443', '98966', '98967', '98968') and POS='02'					then DE=1;
+	if proc_code in ('G0466','G0467','G0468','G0469','G0470','G0511','G0512') and POS='02'				then DE=1;
+
+	if MOD_95=1 or MOD_GT=1 or MOD_GQ =1 or POS='02' or REV_req_KY=1 or 
+	PROC_CODE in ('G2010','G2012','99421','99422','99423','99441','99442','99443','G2061','G2063','99457','99458','Q3014') then KY=1;
+
+	if proc_code in ('97151','97153','97155','97156') and MOD_TGTF =1									then do; KY=1; end;
+	if proc_code in ('T1016') and (MOD_TH =1 or MOD_95 =1)												then do; KY=1; end;
+	if proc_code in ('T1017') and MOD_U1U6 =1															then do; KY=1; end;
+	if proc_code in ('H0043') and MOD_U8 =1																then do; KY=1; end;
+
+	if proc_code in ('Q3014') or MOD_GT =1 or (MOD_UB =1 and "05Mar2020"d<=dos_start<="01Jul2021"d)							then MD=1;
+
+	if proc_code in ('90785', '90791', '90792', '90832', '90833', '90834', '90836', '90837', '90838', '90839', 
+					 '90840', '90846', '90847', '90849', '90853', '90863', '90887', '92507', '92508', '92521', 
+					 '92522', '92523', '92524', '92626', '92627', '92630', '92633', '96103', '96105', '96110', 
+					 '96112', '96113', '96116', '96120', '96121', '96127', '96130', '96131', '96132', '96133', 
+					 '96136', '96137', '96138', '96139', '96146', '97110', '97112', '97116', '97161', '97162', 
+					 '97163', '97164', '97165', '97166', '97167', '97168', '97530', '97535', '97760', '97761', 
+					 '97763', '97802', '97803', '97804', '99201', '99202', '99203', '99204', '99205', '99211', 
+					 '99212', '99213', '99214', '99215', '99221', '99222', '99223', '99224', '99225', '99226', 
+					 '99231', '99232', '99233', '99307', '99308', '99309', '99310', '99324', '99325', '99326', 
+					 '99327', '99328', '99334', '99335', '99336', '99337', '99341', '99342', '99343', '99344', 
+					 '99345', '99347', '99348', '99349', '99350', '99605', 'G0176', 'G0177', 'G0409', 'G2067', 
+					 'G2068', 'G2073', 'G2074', 'G2076', 'G2077', 'G2080', 'H0001', 'H0002', 'H0004', 'H0005', 
+					 'H0015', 'H0022', 'H0023', 'H0025', 'H0031', 'H0032', 'H0034', 'H0036', 'H0038', 'H0039', 
+					 'H0043', 'H0046', 'H0050', 'H2010', 'H2011', 'H2014', 'H2015', 'H2019', 'H2021', 'H2022', 
+					 'H2023', 'H2027', 'H2030', 'H2033', 'S5110', 'S5111', 'S5116', 'S5140', 'S5145', 'S9445', 
+					 'S9446', 'S9470', 'S9482', 'S9484', 'T1001', 'T1002', 'T1012', 'T1015', 'T1016', 'T1017', 
+					 'T1023', 'T2015', 'T2023', 'T5999', '90951', '90952', '90954', '90955', '90957', '90958', 
+					 '90960', '90961', '90963', '90964', '90965', '90966', '90967', '90968', '90969', '90970', 
+					 '92227', '92228', '96156', '96158', '96159', '96160', '96161', '96164', '96165', '96167', 
+					 '96168', '99241', '99242', '99243', '99244', '99245', '99251', '99252', '99253', '99254', 
+					 '99255', '99354', '99355', '99356', '99357', '99406', '99407', '99408', '99409', '99483', 
+					 '99495', '99496', '99497', '99498', 'G0108', 'G0109', 'G0406', 'G0407', 'G0408', 'G0420', 
+					 'G0421', 'G0425', 'G0426', 'G0427', 'G0459', 'G0508', 'G0509', 'G2086', 'G2087', 'G2088', 
+					 'G2212', 'Q3014') and (POS='02' or MOD_GT =1 or MOD_95 =1)												then MI=1;
+	if REV_req_MI =1 and (POS='02' or MOD_GT =1 or MOD_95 =1)																then MI=1;
+	if proc_code in ('99354', '99355', '99415', '99416', '99417') and dos_start>="01Jan2021"d 
+		and (POS='02' or MOD_GT =1 or MOD_95 =1)																			then MI=1;
+
+	if proc_code in ('99241', '99242', '99243', '99244', '99245', '99251', '99252', '99253', '99254', '99255', 
+					 'H2035', 'H2036', 'T1007') and MOD_HF =1 and (POS='02' or MOD_GT =1 or MOD_95 =1)						then MI=1;
+	if proc_code in ('H2000') and MOD_TS =1 and (POS='02' or MOD_GT =1 or MOD_95 =1)										then MI=1;
+	if proc_code in ('97151', '97153', '97154', '97155', '97156', '97157', '97158', '0362T') and MOD_U5 =1 
+		and (POS='02' or MOD_GT =1 or MOD_95 =1)																			then MI=1;
+
+	if MOD_GT =1 or MOD_GQ =1 or MOD_95 =1 or proc_code in ('99441', '99442', '99421', '99422', 
+															'99423', '99457', '99458')					then OH=1;
+
+	if MOD_95 =1 or POS='02'																			then TN=1;
+
+	if proc_code in ('Q3014', '90833', '90834', '90836', '90837', '90838', '90846', '90847', '90853',
+					'90863', '90791', '90792', '90785', '90832', 'T1012', 'S9445') and	MOD_GT =1		then VA=1;
+
+	if POS='02' or MOD_GT =1 or MOD_GQ =1 or MOD_95 =1 or MOD_G0 =1 or 
+		proc_code in ('G0425','G0426','G0427','G2025','G0406','G0407','G0408','G0459','G0508',
+					'G0509','0188T','99441','99442','99443','G2012','G2010','99421','99422',
+					'99423','G2061','G2062','G2063','G0071','G2250','G2251','G2252','98970',
+					'98971','98972','99446','99447','99448','99449','99450','99451','99452',
+					'98966','98967','98968','99453','99454','99457','99091','95250','95251') 			then HA=1; /*HARVARD*/
+
+	if HA=1 and proc_code not in ('G2012','G2010','99421','99422',
+					'99423','G2061','G2062','G2063','G0071','G2250','G2251','G2252','98970',
+					'98971','98972','99446','99447','99448','99449','99450','99451','99452',
+					'99453','99454','99457','99091','95250','95251')									then HA_AV=1; /*HARVARD (AUDIO-ONLY AND VIDEO)*/
+
+	if MOD_GT =1 or MOD_GY =1 or POS='02' or REV_req_WV =1 or proc_code in ('D9995', '99444', 
+					'99421', '99422', '99423', 'G2061', 'G2062', 'G2063', 'G2010', 'G2012', 
+					'Q3014', '98966', '98967', '98968', '99441', '99442', '99443') 						then WV=1;
+
+	if proc_code in ('99212', '99213', '99214', '99215', '99201', '99202', '99203', '99204', '99205') 
+		and MOD_95 =1 and POS='02'																		then WV=1;
+
+	/*The list of telehealth services billed by Medicare from CMS is downloadable from https://www.cms.gov/Medicare/Medicare-General-Information/Telehealth/Telehealth-Codes. 
+	It also included in the Box folder, CMS/CMS_Telehealth.xlsx*/
+	if proc_code in ('77427', '90785', '90791', '90792', '90832', '90833', '90834', '90836', '90837', '90838',
+					'90839', '90840', '90845', '90846', '90847', '90853', '90875', '90951', '90952', '90953', 
+					'90954', '90955', '90956', '90957', '90958', '90959', '90960', '90961', '90962', '90963', 
+					'90964', '90965', '90966', '90967', '90968', '90969', '90970', '92002', '92004', '92012', 
+					'92014', '92507', '92508', '92521', '92522', '92523', '92524', '92601', '92602', '92603', 
+					'92604', '93797', '93798', '93750', '94002', '94003', '94004', '94005', '94664', '95970', 
+					'95971', '95972', '95983', '95984', '96110', '96112', '96113', '96116', '96121', '96127', 
+					'96130', '96131', '96132', '96133', '96136', '96137', '96138', '96139', '96156', '96158', 
+					'96159', '96160', '96161', '96164', '96165', '96167', '96168', '96168', '96170', '96171', 
+					'97110', '97112', '97116', '97150', '97151', '97152', '97153', '97154', '97155', '97156', 
+					'97157', '97158', '97161', '97162', '97163', '97164', '97165', '97166', '97167', '97168', 
+					'97530', '97535', '97542', '97750', '97755', '97760', '97761', '97802', '97803', '97804', 
+					'99202', '99203', '99204', '99205', '99211', '99212', '99213', '99214', '99215', '99217', 
+					'99218', '99219', '99220', '99221', '99222', '99223', '99224', '99225', '99226', '99231', 
+					'99232', '99233', '99234', '99235', '99236', '99238', '99239', '99281', '99282', '99283', 
+					'99284', '99285', '99291', '99292', '99304', '99305', '99306', '99307', '99308', '99309', 
+					'99310', '99315', '99316', '99324', '99325', '99326', '99327', '99328', '99334', '99335', 
+					'99336', '99337', '99341', '99342', '99343', '99344', '99345', '99347', '99348', '99349', 
+					'99350', '99354', '99355', '99356', '99357', '99406', '99407', '99441', '99442', '99443', 
+					'99468', '99469', '99471', '99472', '99473', '99475', '99476', '99477', '99478', '99479', 
+					'99480', '99483', '99495', '99496', '99497', '99498', '0373T', 'S9152', '0362T', 'G0108', 
+					'G0109', 'G0270', 'G0296', 'G0396', 'G0397', 'G0406', 'G0407', 'G0408', 'G0410', 'G0420', 
+					'G0421', 'G0422', 'G0423', 'G0424', 'G0425', 'G0426', 'G0427', 'G0438', 'G0439', 'G0442', 
+					'G0443', 'G0444', 'G0445', 'G0446', 'G0447', 'G0459', 'G0506', 'G0508', 'G0509', 'G0513', 
+					'G0514', 'G2086', 'G2087', 'G2088', 'G9685', 'G2211', 'G2212') and (MOD_GT =1 or MOD_95 =1)	then WV=1;
+
+
+if proc_code in ('T1015') and MOD_GT =1 and MOD_CR =1 and POS in ('50','72') then NC=1;
+if proc_code in ('G0071') and MOD_CR =1 and POS in ('50','72') then NC=1;
+if proc_code in ('99201', '99202', '99203', '99204', '99205', '99211', '99212', 
+				 '99213', '99214', '99215', '99241', '99242', '99243', '99244', '99245', '99251', 
+				 '99252', '99253', '99254', '99255', '99347', '99348', '99349', '99350', '99421', 
+				 '99422', '99423', '99441', '99442', '99443', 'G2012', '99446', '99447', '99448', 
+				 '99449', '99473', '99474', '99453', '99454', '99457', '99458') and MOD_GT =1 and dos_start<"01Jan2020"d then NC=1;
+
+if proc_code in ('99201', '99202', '99203', '99204', '99205', '99211', '99212', 
+				 '99213', '99214', '99215', '99241', '99242', '99243', '99244', '99245', '99251', 
+				 '99252', '99253', '99254', '99255', '99347', '99348', '99349', '99350') and MOD_GT =1 and MOD_CR =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('99421', '99422', '99423', '99441', '99442', '99443', 'G2012', '99446', '99447', '99448', 
+				 '99449', '99473', '99474', '99453', '99454', '99457', '99458') and MOD_CR =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('99501', '99502') and MOD_GT =1 and MOD_CR =1 and POS in ('12') and dos_start>="01Jan2020"d then NC=1;
+if proc_code in ('S9442') and MOD_GT =1 and MOD_CR =1 and POS in ('71') and dos_start>="01Jan2020"d then NC=1;
+if proc_code in ('D0140', 'D0170', 'D0999') and POS in ('02') and dos_start>="01Jan2020"d then NC=1;
+if proc_code in ('T2015') and MOD_GT =1 and MOD_CR =1 and MOD_HI=1 and POS in ('50','72') and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('90785', '90791', '90792', '90832', '90833', '90834', '90836', '90837', '90838',
+				 '90839', '90840', '90846', '90847', '90849', '90853', '96127', '97156', '97157', 
+				 '98966', '98967', '98968', 'G2012', 'H0010', 'H0012', 'H0013', 'H0015', 
+				 'H0019', 'H0035', 'H0038', 'H0040', 'H2011', 'H2017', 'H2020', 'H2022', 'H2033', 
+				 'H2035', 'H2036', 'RC0911', 'RC0183', 'S9484', 'T2013') and MOD_CR =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('96161') and MOD_CR =1 and MOD_EP =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('H2012', 'S9484') and MOD_CR =1 and MOD_HA =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('H0028') and MOD_CR =1 and MOD_HQ =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('H2015') and MOD_CR =1 and MOD_HT =1 and MOD_NC1 =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('59400', '59410', '59425', '59426', '59430', '59510', '59515', '90832', '90834', '90837', 
+				'90846', '90847', '90951', '90952', '90953', '90954', '90955', '90956', '90957', '90958', 
+				'90959', '90960', '90961', '90962', '90963', '90964', '90965', '90966', '90967', '90968', 
+				'90969', '90970', '90989', '90993', '92065', '92507', '92521', '92522', '92523', '92524', 
+				'92526', '92607', '92608', '92609', '92630', '92633', '94010', '94060', '94150', '94375', 
+				'94664', '94760', '95992', '96110', '96112', '96113', '96116', '96121', '96125', '96130', 
+				'96131', '96132', '96133', '96136', '96137', '96138', '96139', '96146', '96156', '96158', 
+				'96159', '97110', '97112', '97116', '97151', '97152', '97153', '97154', '97155', '97161', 
+				'97162', '97163', '97164', '97165', '97166', '97167', '97168', '97530', '97533', '97535', 
+				'97542', '97750', '97763', '97802', '97803', '99201', '99202', '99203', '99204', '99205', 
+				'99211', '99212', '99213', '99214', '99215', '99231', '99232', '99233', '99238', '99239', 
+				'99241', '99242', '99243', '99244', '99245', '99307', '99308', '99309', '99310', '99406', 
+				'99407', '99503', '99504', 'H0031', 'H0036', 'T1017', 'T1023', 'G0108', 'H0038', 'H0040', 
+				'H2011', 'H2022', 'H2033', 'Q3014', 'T1023') and MOD_GT =1 and MOD_CR =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('H0036') and MOD_GT =1 and MOD_CR =1 and MOD_NC2 =1 and dos_start>="01Jan2020"d then NC=1;
+
+if proc_code in ('99201', '99202', '99203', '99204', '99205', '99211', '99213', '99214', '99215', '99241',
+				 '99242', '99243', '99244', '99441', '99442', '99443') and (MOD_GT =1 or MOD_CR =1 or MOD_FP =1) 
+																		and dos_start>="01Jan2020"d 				then NC=1;
+
+if proc_code in ('S0280', 'S0281') and dos_start>="01Jan2020"d then NC=1;
+	
+
+if MOD_GT =1 or MOD_95 =1 or MOD_CR =1 or MOD_DR =1 or POS='02' or proc_code in ('D9995', 'Q3014')							then PA=1;
+
+
+if (MOD_GT =1 or MOD_95 =1 or POS='02') and dos_start>="01Mar2020"d 													then WI=1; 
+if proc_code in ('H2012', '92550', '92585', '92586', '92587', '92588', 'H0039', 'H2017', 'S9484', '90951', 
+					 '90952', '90954', '90955', '90956', '90957', '90958', '90960', '90961', '90967', '90968', 
+					 '90969', '90970', '96156', '96158', '96159', '96167', '96170', '96171', '99251', '99252', 
+					 '99253', '99254', '99255', '99202', '99203', '99204', '99205', '99211', '99212', '99213', 
+					 '99214', '99215', '99241', '99242', '99243', '99244', '99245', '90785', '90791', '90792', 
+					 '90832', '90833', '90834', '90836', '90837', '90838', '90839', '90840', '90845', '90846', 
+					 '90847', '90849', '90875', '90876', '90887', 'H0022', 'H0047', 'T1006') and (MOD_GT =1 or MOD_95 =1 or POS='02') then WI=1;
+if proc_code in ('H0043', 'H0038') and MOD_U8 =1 and dos_start>="01Mar2020"d 											then WI=1;
+if proc_code in ('97151','97153','97155','97156') and MOD_TGTF =1 and dos_start>="01Mar2020"d 							then WI=1;
+if proc_code in ('99201') and (MOD_GT =1 or MOD_95 =1 or POS='02') and dos_start<"01Sep2020"d 							then WI=1;  
+
+if POS='02' or MOD_GT =1 or MOD_95 =1																					then ME=1;
+if proc_code in ('99446', '99447', '99448', '99449', '99451', '99452', 
+				 '0188T', '0189T', 'G0181', 'G0182', 'G0406', 'G0407', 'G0408', 'G0425', 'G0426', 'G0427', 
+				 'Q3014', 'T1014',
+				 'S9110', 'G2010', 'G2012', 'G2061', 'G2062', 'G2063', 'G0071', '98966',
+				 '98967', '98968', '99421', '99422', '99423', '99441', '99442', '99443')								then ME=1;
+
+	if diag1 in: ('F11')							then	OUD_prim=1;
+	if HA=1 and PROC_CODE='Q3014' then HA=.;
+	if &state.=1 or HA=1 then OP=1; /*telehealth*/
+run;
+
+
+proc sql;
+	create table OUD_diag_loc&yr. as
+	select distinct enrl_id, max(OUD) as OUD, max(IP) as IP_OUD, max(inpatient) as IP2_OUD, max(ED) as ED_OUD, max(OP) as OP_OUD
+	from clm_OUD_&yr._
+	group by enrl_id;
+quit;
+
+proc datasets library=work noprint;
+	delete enrl_&yr. moud_ndc_&yr. moud_proc_&yr. long: clm_OUD_&yr. ENRL_period_&yr. ENRL_period_&yr._long ENRL_period_&yr._long_ clm_&yr.;
+run;
+quit;
+
+
+proc sql;
+	create table OUD_cohort_&yr. as
+	select a.*, b.OUD>0 as OUD, b.IP_OUD>0 as IP_OUD, b.IP2_OUD>0 as IP2_OUD, b.ED_OUD>0 as ED_OUD, b.OP_OUD>0 as OP_OUD
+	from enrl_&yr._ as a, OUD_diag_loc&yr. as b
+	where a.enrl_id=b.enrl_id;
+quit;
+
+proc sql;
+	create table OUD_cohort2_&yr. as
+	select a.*, b.MOUD>0 as MOUD, b.BUP>0 as BUP, b.MTD>0 as MTD, b.NALTREX_ORAL>0 as NALTREX_ORAL, b.NALTREX_IM>0 as NALTREX_IM, c.days_enrolled, d.OD>0 as OD, d.N_OD as N_OD,
+			e.anxiety_disorder>0 as anxiety_disorder, e.mood_disorder>0 as mood_disorder, e.schizo_other_psych>0 as schizo_other_psych, e.PTSD>0 as PTSD,
+			e.other_SUD>0 as other_SUD, e.alcohol>0 as alcohol, e.cannabis>0 as cannabis, e.cocaine>0 as cocaine, e.amp_type_stimulant>0 as amp_type_stimulant,
+			e.other_psychoactive>0 as other_psychoactive, e.any_other_SUD>0 as any_other_SUD
+	from OUD_cohort_&yr. as a 
+					left join any_MOUD_&yr. as b 	on a.enrl_id=b.enrl_id
+					left join days_enrolled&yr. as c	on a.enrl_id=c.enrl_id
+					left join OD_summ&yr. as d 		on a.enrl_id=d.enrl_id
+					left join comor_summ&yr. as e 	on a.enrl_id=e.enrl_id;
+quit;
+
+data OUD_cohort2_&yr.;
+	set OUD_cohort2_&yr.;
+	if other_SUD^=1 and OUD=1 then OUD_only=1; else OUD_only=0;
+	if anxiety_disorder=1 or mood_disorder=1 or schizo_other_psych=1 or PTSD=1 then any_MH=1; else any_MH=0;
+run;
+*THIS IS FINAL ANNUAL ANALYTIC DATA;
+
+title "&yr. check";
+proc freq data=OUD_cohort2_&yr.;
+	tables any_MH*anxiety_disorder*mood_disorder*schizo_other_psych*PTSD/list missing;
+run; 
+
+proc freq data=OUD_cohort2_&yr.;
+	tables other_SUD*oud_only*alcohol*cannabis*cocaine*amp_type_stimulant*other_psychoactive*any_other_sud/list missing;
+run; 
+
+/*
+enrl_&yr._
+
+any_MOUD_&yr.: MOUD BUP MTD NALTREX_ORAL NALTREX_IM
+OUD_diag_loc&yr.: IP_OUD ED_OUD OP_OUD
+ENRL_period_&yr._long__: cont_enrl (among qualifyig b_date e_date)
+OD_summ&yr.: OD N_OD
+comor_summ&yr.: 
+
+max(anxiety_disorder)>0 as anxiety_disorder, max(mood_disorder)>0 as mood_disorder, max(schizo_other_psych)>0 as schizo_other_psych, max(PTSD)>0 as PTSD,
+			max(other_SUD) as other_SUD, max(alcohol) as alcohol, max(cannabis) as cannabis, max(cocaine) as cocaine, max(amp_type_stimulant) as amp_type_stimulant,
+							max(other_psychoactive) as other_psychoactive, max(any_other_SUD) as any_other_SUD
+*/
+
+
+
+
+
+/*Figures 1 and 2: Trends in MOUD by race and ethnicity, overall and by type of MOUD*/
+proc sql;
+	create table adult_&yr. as
+	select distinct race_ethnic, count(distinct enrl_id) as N_FBND_18_64_&yr., /*N enrollees age 18-64, any full-benefit, non-dual*/
+								 count(distinct case when(DOD^=. and year(DOD)=&yr.) then enrl_id else '' end) as N_DOD_&yr.
+	from enrl_&yr._
+	where 18<=age<65
+	group by race_ethnic
+	order by race_ethnic;
+quit;
+
+proc sql;
+	create table adult_OUD_&yr. as
+	select distinct race_ethnic, count(distinct enrl_id) as N_OUD_&yr., /*N enrollees with OUD diagnosis*/
+								 count(distinct case when(DOD^=. and year(DOD)=&yr.) then enrl_id else '' end) as N_DOD_&yr.
+	from OUD_cohort2_&yr.
+	where 18<=age<65
+	group by race_ethnic
+	order by race_ethnic;
+quit;
+
+proc sql;
+	create table adult_MOUD_&yr. as
+	select distinct race_ethnic, count(distinct enrl_id) as N_MOUD_&yr. /*N enrollees with any MOUD among those with OUD diagnosis*/
+	from OUD_cohort2_&yr.
+	where MOUD=1 and 18<=age<65
+	group by race_ethnic
+	order by race_ethnic;
+quit;
+
+proc sql;
+	create table adult_bup_&yr. as
+	select distinct race_ethnic, count(distinct enrl_id) as N_bup_&yr. /*N enrollees with any buprenorphine among those with OUD diagnosis*/
+	from OUD_cohort2_&yr.
+	where BUP=1 and 18<=age<65
+	group by race_ethnic
+	order by race_ethnic;
+quit;
+
+proc sql;
+	create table adult_mtd_&yr. as
+	select distinct race_ethnic, count(distinct enrl_id) as N_mtd_&yr. /*N enrollees with any methadone among those with OUD diagnosis*/
+	from OUD_cohort2_&yr.
+	where MTD=1 and 18<=age<65
+	group by race_ethnic
+	order by race_ethnic;
+quit;
+
+proc sql;
+	create table adult_naltrex_oral_&yr. as
+	select distinct race_ethnic, count(distinct enrl_id) as N_naltrex_oral_&yr. /*N enrollees with any oral naltrexone among those with OUD diagnosis*/
+	from OUD_cohort2_&yr.
+	where NALTREX_ORAL=1 and 18<=age<65
+	group by race_ethnic
+	order by race_ethnic;
+quit;
+
+proc sql;
+	create table adult_naltrex_im_&yr. as
+	select distinct race_ethnic, count(distinct enrl_id) as N_naltrex_im_&yr. /*N enrollees with any IM naltrexone among those with OUD diagnosis*/
+	from OUD_cohort2_&yr.
+	where NALTREX_IM=1 and 18<=age<65
+	group by race_ethnic
+	order by race_ethnic;
+quit;
+
+
+
+
+
+
+/*% enrollees with OUD among full-benefit, non-dual enrollees aged 18-64*/
+proc sql;
+	create table OUD_pct_&yr. as
+	select distinct '% OUD among FBND age 18-64' as label format $30., a.race_ethnic, a.N_FBND_18_64_&yr. as N_denom, b.N_OUD_&yr. as N_numer, round(b.N_OUD_&yr./a.N_FBND_18_64_&yr.*100,0.1) as pct_&yr.
+	from adult_&yr. as a left join adult_OUD_&yr. as b
+	on a.race_ethnic=b.race_ethnic
+	order by race_ethnic;
+quit;
+
+/*% enrollees with any MOUD among those with OUD diagnosis*/
+proc sql;
+	create table MOUD_pct_&yr. as
+	select distinct '% MOUD among OUD' as label format $30., a.race_ethnic, a.N_OUD_&yr. as N_denom, b.N_MOUD_&yr. as N_numer, round(b.N_MOUD_&yr./a.N_OUD_&yr.*100,0.1) as pct_&yr.
+	from adult_OUD_&yr. as a left join adult_MOUD_&yr. as b
+	on a.race_ethnic=b.race_ethnic
+	order by race_ethnic;
+quit;
+
+/*% enrollees with any buprenorphine among those with OUD diagnosis*/
+proc sql;
+	create table bup_pct_&yr. as
+	select distinct '% BUP among OUD' as label format $30., a.race_ethnic, a.N_OUD_&yr. as N_denom, b.N_BUP_&yr. as N_numer, round(b.N_BUP_&yr./a.N_OUD_&yr.*100,0.1) as pct_&yr.
+	from adult_OUD_&yr. as a left join adult_BUP_&yr. as b
+	on a.race_ethnic=b.race_ethnic
+	order by race_ethnic;
+quit;
+
+/*% enrollees with any methadone among those with OUD diagnosis*/
+proc sql;
+	create table MTD_pct_&yr. as
+	select distinct '% MTD among OUD' as label format $30., a.race_ethnic, a.N_OUD_&yr. as N_denom, b.N_MTD_&yr. as N_numer, round(b.N_MTD_&yr./a.N_OUD_&yr.*100,0.1) as pct_&yr.
+	from adult_OUD_&yr. as a left join adult_MTD_&yr. as b
+	on a.race_ethnic=b.race_ethnic
+	order by race_ethnic;
+quit;
+
+/*% enrollees with any oral naltrexone among those with OUD diagnosis*/
+proc sql;
+	create table NALTREX_oral_pct_&yr. as
+	select distinct '% oral NALTREX among OUD' as label format $30., a.race_ethnic, a.N_OUD_&yr. as N_denom, b.N_NALTREX_oral_&yr. as N_numer, round(b.N_NALTREX_oral_&yr./a.N_OUD_&yr.*100,0.1) as pct_&yr.
+	from adult_OUD_&yr. as a left join adult_NALTREX_oral_&yr. as b
+	on a.race_ethnic=b.race_ethnic
+	order by race_ethnic;
+quit;
+
+/*% enrollees with any IM naltrexone among those with OUD diagnosis*/
+proc sql;
+	create table NALTREX_im_pct_&yr. as
+	select distinct '% IM NALTREX among OUD' as label format $30., a.race_ethnic, a.N_OUD_&yr. as N_denom, b.N_NALTREX_im_&yr. as N_numer, round(b.N_NALTREX_im_&yr./a.N_OUD_&yr.*100,0.1) as pct_&yr.
+	from adult_OUD_&yr. as a left join adult_NALTREX_im_&yr. as b
+	on a.race_ethnic=b.race_ethnic
+	order by race_ethnic;
+quit;
+
+data percent_&yr.;
+	length label $40.;
+	set OUD_pct_&yr. MOUD_pct_&yr. BUP_pct_&yr. MTD_pct_&yr. NALTREX_oral_pct_&yr. NALTREX_im_pct_&yr.;
+run;
+
+proc sort data=percent_&yr.;
+	by label race_ethnic;
+run;
+
+%mend prelim;
+%prelim(lib=jyk, yr=2016);/*98377*/
+%prelim(lib=jyk, yr=2017);/*107116*/
+%prelim(lib=jyk, yr=2018);/*111151*/
+%prelim(lib=jyk, yr=2019);/*114947*/
+%prelim(lib=jyk, yr=2020);/*111321*/
+
+
+title "Table 1: CY 2020 Descriptive characteristics of Medicaid enrollees with OUD, by race and ethnicity";
+proc freq data=OUD_cohort2_2020;
+	tables (age_gp gender elig_cat rural anxiety: mood: schizo: PTSD oud_only alcohol cannabis cocaine amp_type_stimulant other_psychoactive any_other_SUD 
+			IP_OUD IP2_OUD ED_OUD OP_OUD)*race_ethnic/nocum norow nopercent missing;
+	ods output crosstabfreqs=table1;
+run;
+
+proc means data=OUD_cohort2_2020 n nmiss mean std median maxdec=1;
+	var days_enrolled;
+	class race_ethnic;
+	output out=means_enrl2020(drop=_type_) n= nmiss= mean= std= median=/ autoname;
+run;
+
+data means_enrl2020;
+	set means_enrl2020;
+	state="&state.";
+run;
+
+data table1_;
+	set table1;
+	length label $80.;
+
+	if age_gp=1 then label='12-20';
+	if age_gp=2 then label='21-34'; 
+	if age_gp=3 then label='35-44';
+	if age_gp=4 then label='45-54';
+	if age_gp=5 then label='55-64';
+
+	if gender='F' then label='Female';
+	if gender='M' then label='Male';
+/*
+if race_ethnic=1 then label='Non-Hispanic white';
+if race_ethnic=2 then label='Non-Hispanic black';
+if race_ethnic=3 then label='Hispanic';
+if race_ethnic=4 then label='Others';
+if race_ethnic=5 then label='Unknown/Missing';
+*/
+if elig_cat='3' then label='Disabled';
+if elig_cat='4' then label='Children';
+if elig_cat='5' then label='Expansion adults';
+if elig_cat='6' then label='Non-disabled adults/Pregnancy';
+/*
+	if white=0 then label='Other Race/Ethnicity';
+	if white=1 then label='Non-Hispanic White';
+	if disabled=0 then label='Non-Disabled';
+	if disabled=1 then label='Disabled';
+*/
+	if rural=0 then label='Urban';
+	if rural=1 then label='Rural';         
+	if rural=2 then label='Missing Category';
+
+	if anxiety_disorder=1 then label='Anxiety disorder';
+	if anxiety_disorder=0 then label='No Anxiety disorder';
+	if mood_disorder=1 then label='Mood disorder';
+	if mood_disorder=0 then label='No Mood disorder';
+	if schizo_other_psych=1 then label='Schizophrenia and other psychotic disorder';
+	if schizo_other_psych=0 then label='No Schizophrenia and other psychotic disorder';
+	if PTSD=1 then label='PTSD';
+	if PTSD=0 then label='No PTSD';
+
+	if oud_only=0 then label='OUD only: No';
+	if oud_only=1 then label='OUD only: Yes';
+
+	if alcohol=0 then label='OUD + alcohol: No';
+	if alcohol=1 then label='OUD + alcohol: Yes';
+
+	if cannabis=0 then label='OUD + cannabis: No';
+	if cannabis=1 then label='OUD + cannabis: Yes';
+
+	if cocaine=0 then label='OUD + cocaine: No';
+	if cocaine=1 then label='OUD + cocaine: Yes';
+
+	if amp_type_stimulant=0 then label='OUD + amphetamine: No';
+	if amp_type_stimulant=1 then label='OUD + amphetamine: Yes';
+
+	if other_psychoactive=0 then label='OUD + other psychoactive: No';
+	if other_psychoactive=1 then label='OUD + other psychoactive: Yes';
+
+	if any_other_SUD=0 then label='OUD + any other SUD: No';
+	if any_other_SUD=1 then label='OUD + any other SUD: Yes';
+
+	if IP_OUD=0 then label='OUD diag in IP (CDM IP): No';
+	if IP_OUD=1 then label='OUD diag in IP (CDM IP): Yes';
+
+	if IP2_OUD=0 then label='OUD diag in IP (HEDIS): No';
+	if IP2_OUD=1 then label='OUD diag in IP (HEDIS): Yes';
+
+	if ED_OUD=0 then label='OUD diag in ED: No';
+	if ED_OUD=1 then label='OUD diag in ED: Yes';
+
+	if OP_OUD=0 then label='OUD diag in OP: No';
+	if OP_OUD=1 then label='OUD diag in OP: Yes';
+
+	state="&state.";
+	year=2020;
+	n=_n_;
+	if race_ethnic^=. and label^='';
+	keep label frequency colpercent race_ethnic n state;
+run;
+
+PROC EXPORT DATA=table1_
+            DBMS=XLSX
+            OUTFILE=&path1. 
+            REPLACE;
+    SHEET="Table1 OUD 2020";
+RUN;
+
+PROC EXPORT DATA=Means_enrl2020
+            DBMS=XLSX
+            OUTFILE=&path1. 
+            REPLACE;
+    SHEET="Table1 MEANS";
+RUN;
+
+/*Output data for figures 1 and 2: Trends in MOUD by race and ethnicity, overall and by type of MOUD*/
+%macro summ(ds=);
+data summ1_&ds.;
+   merge &ds._2016 &ds._2017 &ds._2018 &ds._2019 &ds._2020;
+   by race_ethnic;
+run;
+
+data summ1_&ds.;
+	set summ1_&ds.;
+	if race_ethnic=1 then race_ethnic_desc= 'Non-Hispanic white';
+	if race_ethnic=2 then race_ethnic_desc= 'Non-Hispanic black';
+	if race_ethnic=3 then race_ethnic_desc= 'Hispanic';
+	if race_ethnic=4 then race_ethnic_desc= 'Others';
+	if race_ethnic=5 then race_ethnic_desc= 'Unknown/Missing';
+	state="&state.";
+run;
+
+PROC EXPORT DATA=summ1_&ds.
+            DBMS=XLSX
+            OUTFILE=&path1.
+            REPLACE;
+    SHEET="&ds.";
+RUN;
+%mend summ;
+%summ(ds=adult);
+%summ(ds=adult_OUD);
+%summ(ds=adult_MOUD);
+%summ(ds=adult_bup);
+%summ(ds=adult_mtd);
+%summ(ds=adult_naltrex_oral);
+%summ(ds=adult_naltrex_im);
+
+
+data summ1_pct (drop=N_denom N_numer);
+   merge percent_2016 percent_2017 percent_2018 percent_2019 percent_2020;
+   by label race_ethnic;
+run;
+
+data summ1_pct;
+	set summ1_pct;
+	if race_ethnic=1 then race_ethnic_desc= 'Non-Hispanic white';
+	if race_ethnic=2 then race_ethnic_desc= 'Non-Hispanic black';
+	if race_ethnic=3 then race_ethnic_desc= 'Hispanic';
+	if race_ethnic=4 then race_ethnic_desc= 'Others';
+	if race_ethnic=5 then race_ethnic_desc= 'Unknown/Missing';
+	state="&state.";
+run;
+
+PROC EXPORT DATA=summ1_pct
+            DBMS=XLSX
+            OUTFILE=&path1.
+            REPLACE;
+    SHEET="Percentages";
+RUN;
+
+
+
+
+
+/*Table 2: Factors associated with receipt of MOUD, stratified by race and ethnicity */
+
+/*Denominator is full-benefit and non-dual Medicaid beneficiaries ages 18 64, 
+	enrolled for a full 12 months of the measurement year (no gaps), 
+	and had at least one encounter with a diagnosis of OUD (any field) at any time during the measurement year. 
+	This measure will be calculated for years 2016-2020. */
+
+data OUD_cohort;
+	set OUD_cohort2_2016 OUD_cohort2_2017 OUD_cohort2_2018 OUD_cohort2_2019 OUD_cohort2_2020;
+	if 18<=age<65 and days_enrolled>=365 and rural^=2;
+run;
+
+
+/* Print the frequency and distributions */
+proc sort data=OUD_cohort;
+	by race_ethnic;
+run;
+
+proc freq data = OUD_cohort;
+	title 'Summary_MOUD_Receipt_Data';
+	by race_ethnic;
+	tables (age_gp gender elig_cat rural anxiety_disorder mood_disorder schizo_other_psych PTSD alcohol cannabis cocaine amp_type_stimulant other_psychoactive any_other_SUD
+							year)*MOUD/norow nopercent nocol missing;
+run;
+
+/* Sort the data by enrl_id */
+proc sort data=OUD_cohort;
+	by enrl_id;
+run;
+
+/*Export STATA data to run a log binomial model with MOUD receipt as the outcome*/
+PROC EXPORT DATA=OUD_cohort
+            OUTFILE= "&path2.MODRN_disparities_OUD_cohort.dta" 
+            DBMS=STATA REPLACE;
+RUN;
+
+
+/*For Figure 3: Opioid overdose rates among those with OUD by race and ethnicity */
+data OUD_cohort_18_64;
+	set OUD_cohort2_2016 OUD_cohort2_2017 OUD_cohort2_2018 OUD_cohort2_2019 OUD_cohort2_2020;
+	if 18<=age<65;
+run;
+
+proc sql;
+	create table OD_rate as
+	select distinct year, race_ethnic, count(distinct case when (OD=1) then enrl_id else '' end) as N_enrollee_OD, sum(n_od) as total_N_OD, count(distinct enrl_id) as N_enrollee_OUD,
+				calculated total_N_OD/calculated N_enrollee_OUD*1000 as N_OD_rate_per1000_ID
+	from OUD_cohort_18_64
+	group by year, race_ethnic
+	order by year, race_ethnic;
+quit;
+
+data OD_rate;
+	set OD_rate;
+	if race_ethnic=1 then race_ethnic_desc= 'Non-Hispanic white';
+	if race_ethnic=2 then race_ethnic_desc= 'Non-Hispanic black';
+	if race_ethnic=3 then race_ethnic_desc= 'Hispanic';
+	if race_ethnic=4 then race_ethnic_desc= 'Others';
+	if race_ethnic=5 then race_ethnic_desc= 'Unknown/Missing';
+	state="&state.";
+run;
+
+PROC EXPORT DATA=OD_rate
+            DBMS=XLSX
+            OUTFILE=&path1. 
+            REPLACE;
+    SHEET="Opiod Overdose Rates";
+RUN;
+
+
+/*Table 3: Factors associated with continuity of MOUD, stratified by race and ethnicity */
+
+/*	1) Denominator is enrollees who initiated MOUD who is continuously enrolled for 6 months before index MOUD (clean period) 
+		and 8 months after index MOUD (8 instead of 6 months to allow for some minimal gaps in treatment (<=7 days)). 
+		So, a total of 14 months continuous enrollment is required. 
+	2) The outcome variable is continuity for 180 days without a gap of more than 7 days.
+ */
+
+/*DATA PREPARATION*/
+
+/*enrollment periods in long format*/
+data ENRL_period_long;
+	set ENRL_period_2016_long__ ENRL_period_2017_long__ ENRL_period_2018_long__ ENRL_period_2019_long__ ENRL_period_2020_long__;
+run;
+
+proc sort data=ENRL_period_long;
+	by enrl_id b_date e_date;
+run;
+
+data ENRL_period_long_; 
+	set ENRL_period_long (drop=days_enrolled); 
+		by enrl_id; 
+retain new_b_date new_e_date;
+ 
+	if first.enrl_id then do;
+		new_b_date = b_date;
+		new_e_date = e_date;
+	end; 
+
+	if (b_date le (new_e_date + 1)) then do;
+		b_date = new_b_date;
+		new_e_date = e_date;
+	end;
+
+	else do;
+		new_b_date = b_date;
+		new_e_date = e_date;
+	end;
+	
+	format new_b_date date9. new_e_date date9.;
+run;
+
+proc sort data=ENRL_period_long_; 
+	by enrl_id b_date;
+run;
+
+data ENRL_period_long__;
+	set ENRL_period_long_; 
+		by enrl_id b_date;
+
+	if last.b_date then output;
+run;
+
+/*continuously enrolled periods in long format*/
+data ENRL_period_long__;
+	set ENRL_period_long__;
+	cont_enrl=1;
+	drop new_b_date new_e_date;
+run;
+
+proc datasets library=work noprint;
+	delete ENRL_period_long_ ENRL_period_long;
+run;
+quit; 
+
+/*all MOUD claims*/
+data MOUD;
+	set MOUD_2016 MOUD_2017 MOUD_2018 MOUD_2019 MOUD_2020;
+run;
+
+/*Sort MOUD claims by ENRL_ID and date and calculate the number of gap days with no MOUD*/
+/*if there is a tie, prioritize methadone?*/
+proc sort data=MOUD;
+	by enrl_id dos_start descending MTD dos_end clm_id detail_number;
+run;
+
+*calculate gap days from prior fill end date;
+data MOUD;
+	set MOUD;
+	gap_days=dos_start-lag(dos_end)-1;
+run;
+
+data MOUD_2;
+	set MOUD;
+	by enrl_id;
+
+	if first.enrl_id then do;
+		gap_days=.;
+	end;
+
+	duration=dos_end-dos_start+1;
+run;
+
+proc datasets library=work noprint;
+	delete MOUD;
+run;
+quit; 
+
+/*Append the enrollment period that includes DOS_START of given MOUD claim to ensure enrollment >=180 days prior to given MOUD claim (180-day clean period with no MOUD requires enrollment during the 180 days)
+and select MOUD claims with >=180 gap days*/
+proc sql;
+	create table MOUD_initn_prep1 as 
+	select a.*, b.b_date, b.e_date, a.dos_start-b.b_date as days_from_enrl, b.e_date-a.dos_start as days_to_disenrl
+	from MOUD_2 as a, ENRL_period_long__ as b
+	where a.enrl_id=b.enrl_id and b.b_date<=a.dos_start<=b.e_date and (a.gap_days>=180 or a.gap_days=.);
+quit;
+
+data MOUD_initn_clean180d;
+	set MOUD_initn_prep1;
+	if days_from_enrl>=180;
+run;
+
+/*
+proc sql;
+	create tableMOUD_initn_clean180d as 
+	select a.*, b.b_date, b.e_date, a.dos_start-b.b_date as days_from_enrl
+	from MOUD_2 as a, ENRL_period_long__ as b
+	where a.enrl_id=b.enrl_id and b.b_date<=a.dos_start<=b.e_date and (a.gap_days>=180 or a.gap_days=.) and calculated days_from_enrl>=180;
+quit;
+*/
+
+*select those with 8 months (240 days) continuous enrollment after MOUD initiation;
+data MOUD_initn_clean180d;
+	set MOUD_initn_clean180d;
+	if days_to_disenrl>=240;
+	year=year(dos_start);
+	month=month(dos_start);
+run;
+
+
+/*NEED TO SUBSET 'MOUD_initn_clean180d' TO 18-64, RURAL^=2, OUD, FULL-BENEFIT in the year of initiation*/
+data OUD_cohort2;
+	set OUD_cohort2_2016 OUD_cohort2_2017 OUD_cohort2_2018 OUD_cohort2_2019 OUD_cohort2_2020; /*full-benefit, non-dual OUD cohort ages 12-64*/
+	if 18<=age<65 and rural^=2;
+run;
+
+proc sql;
+	create table MOUD_initn_prep as
+	select a.*
+	from MOUD_initn_clean180d as a, OUD_cohort2 as b
+	where a.enrl_id=b.enrl_id and a.year=b.year;
+quit;
+
+%macro monthly (lib=, yr=);
+
+/*monthly observations for the month of initiation*/
+proc sql;
+	create table MOUD_initn_prep_&yr._ as
+	select a.*, b.dob, b.gender, b.race_ethnic format race_ethfmt., b.elig_cat format $elig_catfmt., b.zip5
+	from MOUD_initn_prep as a, &lib..Mcdm_2_0_enrl_monthly_&yr. (keep=ENRL_ID MONTH DOB GENDER RACE_ETHNIC ELIG_CAT ZIP5) as b
+	where a.enrl_id=b.enrl_id and a.year=&yr. and a.month=b.month and b.elig_cat in ('3','4','5','6');
+quit;
+
+/*DEFINE RURAL vs URBAN*/
+proc sql;
+	create table MOUD_initn_prep_&yr. as
+	select a.*, b.RUCA1 as RUCA_primary, case when (RUCA1 in (1,2,3)) then 0 else case when (RUCA1 in (99,.)) then 2 else 1 end end as rural format area_fmt.
+	from MOUD_initn_prep_&yr._ as a left join ruca as b
+	on a.zip5=b.ZIP_CODE;
+quit;
+
+data MOUD_initn_prep_&yr.;
+	set MOUD_initn_prep_&yr.;
+	age=((dos_start-dob)/365.25);/*age at initiation*/
+run;
+
+proc sql;
+	create table comor_ini_&yr. as
+	select *
+	from comor_&yr.
+	where enrl_id in (select distinct enrl_id from MOUD_initn_prep);
+quit;
+
+proc datasets library=work noprint;
+	delete MOUD_initn_prep_&yr._;
+run;
+quit; 
+
+%mend monthly;
+%monthly(lib=jyk, yr=2016);
+%monthly(lib=jyk, yr=2017);
+%monthly(lib=jyk, yr=2018);
+%monthly(lib=jyk, yr=2019);
+%monthly(lib=jyk, yr=2020);
+
+/*MOUD initiations with 6 months MOUD clean period before initiation, 6 months continuous enrollment pre-initiation, 8 months continuous enrollment post-initiation*/
+data MOUD_initn_final;
+	set MOUD_initn_prep_2016 MOUD_initn_prep_2017 MOUD_initn_prep_2018 MOUD_initn_prep_2019 MOUD_initn_prep_2020;
+run;
+
+proc sort data=MOUD_initn_final nodupkey;
+	by enrl_id dos_start;
+run;
+
+data comor_ini;
+	set comor_ini_2016 comor_ini_2017 comor_ini_2018 comor_ini_2019 comor_ini_2020;
+run;
+
+/*Identify comorbidites during 8 months post MOUD initiation.*/
+proc sql;
+	create table comor_ini_240d as
+	select a.*, b.dos_start as initiation_dt, b.dos_start+240 as post_240d_end_dt format date9.
+	from comor_ini as a, MOUD_initn_final as b
+	where a.enrl_id=b.enrl_id and b.dos_start<=a.dos_start<=b.dos_start+240;
+quit;
+
+proc sql;
+	create table comor_ini_summ as
+	select distinct enrl_id, initiation_dt, max(anxiety_disorder)>0 as anxiety_disorder, max(mood_disorder)>0 as mood_disorder, max(schizo_other_psych)>0 as schizo_other_psych, max(PTSD)>0 as PTSD,
+			max(other_SUD) as other_SUD, max(alcohol) as alcohol, max(cannabis) as cannabis, max(cocaine) as cocaine, max(amp_type_stimulant) as amp_type_stimulant,
+							max(other_psychoactive) as other_psychoactive, max(any_other_SUD) as any_other_SUD
+	from comor_ini_240d
+	group by enrl_id, initiation_dt
+	order by enrl_id, initiation_dt;
+quit;
+
+proc sql;
+	create table MOUD_initn_final2 as
+	select a.*, e.anxiety_disorder>0 as anxiety_disorder, e.mood_disorder>0 as mood_disorder, e.schizo_other_psych>0 as schizo_other_psych, e.PTSD>0 as PTSD,
+			e.other_SUD>0 as other_SUD, e.alcohol>0 as alcohol, e.cannabis>0 as cannabis, e.cocaine>0 as cocaine, e.amp_type_stimulant>0 as amp_type_stimulant,
+			e.other_psychoactive>0 as other_psychoactive, e.any_other_SUD>0 as any_other_SUD
+	from MOUD_initn_final as a left join comor_ini_summ as e
+	on a.enrl_id=e.enrl_id and a.dos_start=e.initiation_dt;
+quit;
+
+data MOUD_initn_final2;
+	set MOUD_initn_final2;
+	if other_SUD^=1 then OUD_only=1; else OUD_only=0;
+	if anxiety_disorder=1 or mood_disorder=1 or schizo_other_psych=1 or PTSD=1 then any_MH=1; else any_MH=0;
+run;
+
+
+
+
+
+*IDENTIFY CONTINUOUS MOUD FOR 180 DAYS DURING POST 8 MONTHS;
+
+/*Subset MOUD claims to initiation sample, between initiation date and +240 days (8 months)*/
+proc sql;
+	create table MOUD_ini_8m as
+	select a.*, b.dos_start as initiation_dt
+	from MOUD_2 (drop=gap_days duration) as a, MOUD_initn_final2 as b
+	where a.enrl_id=b.enrl_id and b.dos_start<=a.dos_start<=b.dos_start+240;
+quit;
+
+proc sql;
+	select count(distinct(cats(enrl_id, initiation_dt)))
+	from MOUD_ini_8m;
+quit;
+
+/*1. Create two datasets: one for prescription OUD medication claims (retainable), 
+					and the other for injections/implants and for licensed treatment center-dispensed methadone and office-dispensed buprenorphine/naloxone (non-retainable). 
+
+ 	Naltrexone and buprenorphine injections contribute 30 days  supply and a buprenorphine implant 180 days unless another claim is found sooner, in which case the injection or implant covers only the days up to the next claim.
+ 	Methadone and buprenorphine/naloxone supply is determined by the start and end dates on the outpatient claims with the codes for in-office/treatment center dispensation of methadone and buprenorphine/naloxone, unless otherwise specified in  MODRN_MOUD_plus_NQF3175_2021ver.xlsx 
+*/
+
+data inj_imp;
+	set MOUD_ini_8m (where=(type in (4, 5, 6, 7) and proc_code=''));
+run;
+
+/*prescription claims (except injectable/implantable MOUD) - TO RETAIN SURPLUS*/
+data oud_med_prscrp (drop=proc_code rename=(dos_start=dos));
+	set MOUD_ini_8m;
+	if type not in (4, 5, 6, 7) and proc_code=''; /*excluding injectable/implantable MOUD and other office-based MOUD*/
+run;
+
+/*licensed treatment center-dispensed methadone, office-dispensed buprenorphine/naloxone, and buprenorphine/naltrexone injections/implants - DO NOT RETAIN*/
+data oud_med_office;
+	set MOUD_ini_8m (where=(proc_code^='')) inj_imp;
+	*drop proc_code;
+run;
+
+proc sort data=oud_med_office nodupkey;
+	by enrl_id initiation_dt dos_start dos_end;
+run;
+
+/*2. Sort the retainable OUD medication claims by individual s ID and service date. 
+	Scan the claims in order, calculating a rolling surplus which accumulates any remaining days  supply from other prior or same-day fills. 
+	Create DOS_START and DOS_END variables after taking the rolling surplus into account.*/
+
+/*sort prescription claims*/
+proc sort data=oud_med_prscrp;
+	by enrl_id initiation_dt dos days_supply;
+run;
+
+/*using sorted prescrition claims (excluding injectable/implantable MOUD), create 'dos_start' and 'dos_end' AFTER TAKING SURPLUS MEDICATIONS INTO ACCOUNT*/
+data prscrp_shift;
+	set oud_med_prscrp;
+	by enrl_id initiation_dt;
+	retain temp;
+	if first.initiation_dt then do; 
+		temp=dos+days_supply;
+		dos_start=dos;
+		dos_end=temp-1;
+	end;
+	else if dos<temp then do;
+		dos_start=temp;
+		temp=temp+days_supply;
+		dos_end=temp-1;
+	end;
+	else do;
+		dos_start=dos;
+		dos_end=dos+days_supply-1;
+		temp=dos+days_supply;
+	end;
+	format dos_start dos_end temp date9.;
+run;
+
+/*3. Combine the retainable dataset from Step 2 and non-retainable dataset created in Step 1.
+	For claims with a days  supply that extends beyond the end of the measurement period (8 months post-initiation), count only the days for which the drug was available to the individual during 
+	the measurement period: Combine both MOUD datasets from Step 1 $ Step 2, and modify any DOS_END that 
+	1) goes beyond the 8 months post-initiation or 2) goes beyond the individual s death date.*/
+
+/*combine all OUD medications*/
+data all_oud_med;
+	set prscrp_shift   (keep=enrl_id dos_start dos_end type initiation_dt) 
+		oud_med_office (keep=enrl_id dos_start dos_end type initiation_dt proc_code);
+run;
+
+proc sql;
+	select count(distinct(cats(enrl_id, initiation_dt)))
+	from all_oud_med;
+quit;
+
+*The injection or implant covers only the days up to the next claim, if another claim is found sooner (before the individual exhausts days' supply);
+*Adjust DOS_END of injectable/implantable MOUD accordingly;
+
+proc sort data=all_oud_med;
+	by enrl_id initiation_dt descending dos_start descending dos_end;
+run;
+
+
+data all_oud_med_trunc;
+	set all_oud_med;
+	by enrl_id initiation_dt;
+	retain temp;
+	if first.initiation_dt then do; 
+		temp=dos_start;
+	end;
+	else if dos_end>temp and temp>dos_start and type in (4, 5, 6, 7) then do;
+		dos_end_adj=temp-1;
+		temp=dos_start;
+	end;
+	else do;
+		temp=dos_start;
+	end;
+	format dos_end_adj temp date9.;
+run;
+
+data all_oud_med__;
+	set all_oud_med_trunc (drop=temp);
+	if dos_end_adj^=. then dos_end=dos_end_adj;
+	drop dos_end_adj;
+run;
+
+proc sort data=all_oud_med__;
+	by enrl_id initiation_dt dos_start dos_end;
+run;
+
+/*delete rows that go beyond 8 months post initiation period*/
+data all_oud_med__;
+	set all_oud_med__;
+	if dos_start>initiation_dt+240 then delete;
+	if dos_start<=initiation_dt+240 and dos_end>initiation_dt+240 then dos_end=initiation_dt+240;
+run;
+
+proc sql;
+	select count(distinct(cats(enrl_id, initiation_dt)))
+	from all_oud_med__;
+quit;
+
+/*add date of death*/
+proc sql;
+	create table MOUD_initn_final3 as
+	select a.*, coalesce(f.dod, e.dod, d.dod, c.dod, b.dod) as dod format date9.
+	from MOUD_initn_final2 as a  left join enrl_2016_ (keep=enrl_id dod) as b on a.enrl_id=b.enrl_id
+								left join enrl_2017_ (keep=enrl_id dod) as c on a.enrl_id=c.enrl_id
+								left join enrl_2018_ (keep=enrl_id dod) as d on a.enrl_id=d.enrl_id
+								left join enrl_2019_ (keep=enrl_id dod) as e on a.enrl_id=e.enrl_id
+								left join enrl_2020_ (keep=enrl_id dod) as f on a.enrl_id=f.enrl_id;
+quit;
+
+proc sql;
+	create table all_oud_med2 as
+	select a.*, b.dod
+	from all_oud_med__ as a left join MOUD_initn_final3 as b
+	on a.enrl_id=b.enrl_id;
+quit;
+
+proc sort data=all_oud_med2 nodupkey;
+	by _all_;
+run;
+
+/*replace dos_end that goes beyond DOD to DOD*/
+data all_oud_med2;
+	set all_oud_med2;
+	if dod^=. and dos_end>dod then dos_end=dod;
+run;
+
+proc sql;
+	select count(distinct(cats(enrl_id, initiation_dt)))
+	from all_oud_med2;
+quit;
+
+/*4. Sort the dataset from Step 3 by individual s ID and service date. 
+	Scan the claims in order, identifying episodes; an episode is defined as a period with continuous pharmacotherapy with a medication prescribed for OUD 
+	without a gap of more than seven days. Then calculate duration for each episode.*/
+
+/*sort*/
+proc sort data=all_oud_med2;
+	by enrl_id initiation_dt dos_start dos_end;
+run;
+
+/*identify episodes (continuing OUD medications allowing gaps up to 7days)*/
+data all_oud_med_epi;
+  set all_oud_med2;
+  by enrl_id initiation_dt;
+  if first.initiation_dt then do;
+    episode_start=dos_start;/* start a new period */
+	episode_end=dos_end;
+  end;
+  else if dos_start-episode_end>7 then do;
+    output; /* output previous period */
+    episode_start=dos_start;  /* start a new period */
+    end;
+  if episode_end<dos_end then episode_end=dos_end;
+  if last.initiation_dt then
+    output;  /* output last period */
+  retain episode_start episode_end;
+  drop dos_start dos_end;
+  rename episode_start=dos_start episode_end=dos_end;
+  format episode_start episode_end date9.;
+run;
+
+data all_oud_med_epi2;
+	set all_oud_med_epi;
+	duration=dos_end-dos_start+1;
+run;
+
+proc sql;
+	select count(distinct(cats(enrl_id, initiation_dt)))
+	from all_oud_med_epi2;
+quit;
+
+/*5. Among the episodes identified from Step 4, find the maximum duration of episode and the maximum (latest) DOS_END per individual-initiation date. */
+proc sql;
+	create table cont_pharm_max as
+	select distinct enrl_id, initiation_dt, max(duration) as max_cont_pharm_days /*maximum period(days) with MOUD within 8 months starting from the initiation date with no gap of more than seven days*/
+	from all_oud_med_epi2
+	group by enrl_id, initiation_dt;
+quit;
+
+/*6. Based on the maximum duration of episode, determine if the individual has a period of 180 days (90/270 days) or greater 
+	from the start date of the first claim for OUD medication to the end date of the last claim for OUD medication within the two-year period 
+	and who do not have a gap of more than seven days without OUD medication available. This is the numerator. */
+proc sql;
+	create table MOUD_initn_final4 as 
+	select a.*,	b.max_cont_pharm_days, b.max_cont_pharm_days>=180 as cont_pharm_180d 
+	from MOUD_initn_final3 (rename=(dos_start=initiation_dt)) as a, cont_pharm_max as b
+	where a.enrl_id=b.enrl_id and a.initiation_dt=b.initiation_dt;
+quit;
+
+proc freq data=MOUD_initn_final4;
+	tables max_cont_pharm_days*cont_pharm_180d/list missing;
+run;
+
+
+*RUN MODELS BY RACE/ETH (SEE 'Aim1_paper_revision_11162020_GEE_v2.SAS';
+/*Table 3: Factors associated with continuity of MOUD, stratified by race and ethnicity  */
+
+data MOUD_initn_final5;
+	set MOUD_initn_final4;
+
+	if MTD=. then MTD=0;
+	if BUP=. then BUP=0;
+	if NALTREX_ORAL=. then NALTREX_ORAL=0;
+	if NALTREX_IM=. then NALTREX_IM=0;
+
+	if 12<=age<21 then age_gp=1;
+	else if 21<=age<35 then age_gp=2;
+	else if 35<=age<45 then age_gp=3;
+	else if 45<=age<55 then age_gp=4;
+	else if 55<=age<65 then age_gp=5;
+
+	format age_gp age_gp.;
+
+	if rural^=2;
+run;
+
+
+proc sort data=MOUD_initn_final5;
+	by race_ethnic;
+run;
+
+/* Print the frequency and distributions */
+proc freq data = MOUD_initn_final5;
+	title 'Summary_MOUD_Continuity_Data';
+	by race_ethnic;
+	tables (age_gp MTD gender elig_cat rural anxiety_disorder mood_disorder schizo_other_psych PTSD alcohol cannabis cocaine amp_type_stimulant other_psychoactive any_other_SUD
+							year)*cont_pharm_180d/norow nopercent nocol missing;
+run;
+
+/* Sort the data by enrl_id */
+proc sort data=MOUD_initn_final5;
+	by enrl_id;
+run;
+
+/*Export STATA data to run a log binomial model with 180-day MOUD continuity as the outcome*/
+PROC EXPORT DATA=MOUD_initn_final5
+            OUTFILE= "&path2.MODRN_disparities_MOUD_initn_final5.dta" 
+            DBMS=STATA REPLACE;
+RUN;
+
+
+
+
+/*ADD MULTI-YEAR VERSION OF TABLE1*/
+
+data OUD_cohort2_all;
+	set OUD_cohort2_2016 OUD_cohort2_2017 OUD_cohort2_2018 OUD_cohort2_2019 OUD_cohort2_2020;
+run;
+
+proc means data=OUD_cohort2_all n nmiss mean std median maxdec=1;
+	var days_enrolled;
+	class year race_ethnic;
+	output out=means_enrl(drop=_type_) n= nmiss= mean= std= median=/ autoname;
+run;
+
+data means_enrl;
+	set means_enrl;
+	state="&state.";
+run;
+
+PROC EXPORT DATA=means_enrl
+            DBMS=XLSX
+            OUTFILE=&path1. 
+            REPLACE;
+    SHEET="Table1 MEANS all years";
+RUN;
+
+%macro t1(yr=);
+title "Table 1: CY &yr. Descriptive characteristics of Medicaid enrollees with OUD, by race and ethnicity";
+proc freq data=OUD_cohort2_all;
+	where year=&yr.;
+	tables (age_gp gender elig_cat rural anxiety: mood: schizo: PTSD oud_only alcohol cannabis cocaine amp_type_stimulant other_psychoactive any_other_SUD 
+			IP_OUD IP2_OUD ED_OUD OP_OUD)*race_ethnic/nocum norow nopercent missing;
+	ods output crosstabfreqs=table1&yr.;
+run;
+
+data table1&yr._;
+	set table1&yr.;
+	length label $80.;
+
+	if age_gp=1 then label='12-20';
+	if age_gp=2 then label='21-34'; 
+	if age_gp=3 then label='35-44';
+	if age_gp=4 then label='45-54';
+	if age_gp=5 then label='55-64';
+
+	if gender='F' then label='Female';
+	if gender='M' then label='Male';
+/*
+if race_ethnic=1 then label='Non-Hispanic white';
+if race_ethnic=2 then label='Non-Hispanic black';
+if race_ethnic=3 then label='Hispanic';
+if race_ethnic=4 then label='Others';
+if race_ethnic=5 then label='Unknown/Missing';
+*/
+if elig_cat='3' then label='Disabled';
+if elig_cat='4' then label='Children';
+if elig_cat='5' then label='Expansion adults';
+if elig_cat='6' then label='Non-disabled adults/Pregnancy';
+/*
+	if white=0 then label='Other Race/Ethnicity';
+	if white=1 then label='Non-Hispanic White';
+	if disabled=0 then label='Non-Disabled';
+	if disabled=1 then label='Disabled';
+*/
+	if rural=0 then label='Urban';
+	if rural=1 then label='Rural';         
+	if rural=2 then label='Missing Category';
+
+	if anxiety_disorder=1 then label='Anxiety disorder';
+	if anxiety_disorder=0 then label='No Anxiety disorder';
+	if mood_disorder=1 then label='Mood disorder';
+	if mood_disorder=0 then label='No Mood disorder';
+	if schizo_other_psych=1 then label='Schizophrenia and other psychotic disorder';
+	if schizo_other_psych=0 then label='No Schizophrenia and other psychotic disorder';
+	if PTSD=1 then label='PTSD';
+	if PTSD=0 then label='No PTSD';
+
+	if oud_only=0 then label='OUD only: No';
+	if oud_only=1 then label='OUD only: Yes';
+
+	if alcohol=0 then label='OUD + alcohol: No';
+	if alcohol=1 then label='OUD + alcohol: Yes';
+
+	if cannabis=0 then label='OUD + cannabis: No';
+	if cannabis=1 then label='OUD + cannabis: Yes';
+
+	if cocaine=0 then label='OUD + cocaine: No';
+	if cocaine=1 then label='OUD + cocaine: Yes';
+
+	if amp_type_stimulant=0 then label='OUD + amphetamine: No';
+	if amp_type_stimulant=1 then label='OUD + amphetamine: Yes';
+
+	if other_psychoactive=0 then label='OUD + other psychoactive: No';
+	if other_psychoactive=1 then label='OUD + other psychoactive: Yes';
+
+	if any_other_SUD=0 then label='OUD + any other SUD: No';
+	if any_other_SUD=1 then label='OUD + any other SUD: Yes';
+
+	if IP_OUD=0 then label='OUD diag in IP (CDM IP): No';
+	if IP_OUD=1 then label='OUD diag in IP (CDM IP): Yes';
+
+	if IP2_OUD=0 then label='OUD diag in IP (HEDIS): No';
+	if IP2_OUD=1 then label='OUD diag in IP (HEDIS): Yes';
+
+	if ED_OUD=0 then label='OUD diag in ED: No';
+	if ED_OUD=1 then label='OUD diag in ED: Yes';
+
+	if OP_OUD=0 then label='OUD diag in OP: No';
+	if OP_OUD=1 then label='OUD diag in OP: Yes';
+
+	state="&state.";
+	year=&yr.;
+	n=_n_;
+	if race_ethnic^=. and label^='';
+	keep label frequency colpercent race_ethnic n state year;
+run;
+
+PROC EXPORT DATA=table1&yr._
+            DBMS=XLSX
+            OUTFILE=&path1. 
+            REPLACE;
+    SHEET="Table1 OUD &yr.";
+RUN;
+
+%mend t1;
+%t1(yr=2016);
+%t1(yr=2017);
+%t1(yr=2018);
+%t1(yr=2019);
+%t1(yr=2020);
