@@ -1,0 +1,659 @@
+clear 
+clc
+
+%format long g
+
+%% Setup some parameters, nyaa
+beta    = 0.98;
+r       = 0.04;
+ngrid   = 1001;
+Amin    = 0;
+Amax    = 1000000;
+periods = 60;
+
+Ya      = [50000 * ones(40,1); zeros(20,1)];
+Yb      = [40000 * ones(40,1); zeros(20,1)];
+
+%% Setup Vectors owo
+%assets.matrix. fill in last columns backward 
+%know A_T+1 must == 0. thus we have it be one column longer desu
+A(:,periods:periods+1) = [ linspace(Amin,Amax,ngrid)' ,  zeros(ngrid,1) ];
+
+%% solve last period. just use C as a matrix containing TOTAL expenditures
+%rivially know that Ca Cb and Q are just fractions 0.2 0.2 and 0.6 of this
+
+%in last period, consume all assetsn 
+%C(:,periods)    = A(:,periods) + Ya(periods) + Yb(periods) - A(:,periods+1)./(1+r);
+
+% using euler equations, pin down total consumption expenditures
+%C(:,periods-1)  = C(:,periods).*(1/beta/(1+r));
+
+%now pin down Assets in penultimate period
+%A(:,periods-1)  = A(:,periods) ./ (1+r) + C(:,periods-1) - Ya(periods-1) - Yb(periods-1);
+
+%now rewite this in a loop, desu!
+
+for t = periods:-1:2
+    %in last period, consume all assetsn 
+    C(:,t)    = A(:,t) + Ya(t) + Yb(t) - A(:,t+1)./(1+r);
+
+    % using euler equations, pin down total consumption expenditures
+    C(:,t-1)  = C(:,t).*(1/beta/(1+r));
+
+    %now pin down Assets in penultimate period
+    A(:,t-1)  = A(:,t) ./ (1+r) + C(:,t-1) - Ya(t-1) - Yb(t-1); 
+end
+
+%% Now find the correct stream of assets and consumption
+%should be the one where once we work backward, we get assets are closes to
+%0 
+ismin = ( abs(A(:,1)) == min(abs(A(:,1))));
+index = find(ismin)
+Astream = A(index,:)';
+Cstream = C(index,:)';
+
+%total Cstream is same for both A and B. however, its subdivisions into
+% c_A c_B and Q differs between the problems
+
+%% Now plot these 
+
+Astream
+
+
+%asset stream for both A and B
+plot(Astream)
+hold on
+plot([40 40],[min(Astream) max(Astream)])
+xlabel('Time')
+ylabel('Dollars')
+title('Assets by Age')
+legend('Asset Holdings','Retirement Age','location','northwest')
+saveas(gcf,'Part A Assets.png')
+saveas(gcf,'Part B Assets.png')
+close
+
+%plot consumption in part A
+CstreamAA = 0.2*Cstream;
+CstreamAB = 0.2*Cstream;
+CstreamAQ = 0.6*Cstream;
+
+plot(Cstream)
+hold on 
+plot(CstreamAA)
+plot(CstreamAB)
+plot(CstreamAQ)
+plot([40 40],[0 max(Cstream)])
+xlabel('Time')
+ylabel('Dollars')
+title('Consumption by Age')
+%note c^A and c^B have same value so need to label accordingly...
+legend('Total','c^A and c^B','c^B','Q','Retirement Age','location','northwest')
+saveas(gcf,'Part A Consumption.png')
+close 
+
+% c stream in part B
+thetavec = [0.3:0.2:0.7];
+for index = 1:1:3
+    theta = thetavec(index)
+    denom = 0.4 * theta + 0.2 * (1-theta) + 0.6;
+    
+    CstreamBA = 0.4 * theta       / denom .* Cstream;
+    CstreamBB = 0.2 * (1 - theta) / denom .* Cstream;
+    CstreamBQ = 0.6               / denom .* Cstream;
+    
+    plot(Cstream)
+    hold on 
+    plot(CstreamBA)
+    plot(CstreamBB)
+    plot(CstreamBQ)
+    plot([40 40],[0 max(Cstream)])
+    xlabel('Time')
+    ylabel('Dollars')
+    title(['Consumption by Age, \theta = ',num2str(theta)])
+    %note c^A and c^B have same value so need to label accordingly...
+    legend('Total','c^A','c^B','Q','Retirement Age','location','northwest')
+    saveas(gcf,['Part B Consumption Theta ',num2str(theta),'.png'])
+    close
+end
+
+%% PART C
+
+%the probability is downloaded from SSA website and manually converted to
+%excel
+survival = readtable('probability.xlsx')
+
+totaldeaths = sum(survival.deaths);
+tablesize = size(survival.age)
+survival.popsize(1) = totaldeaths;
+
+for t = 1:1:tablesize(1)-1
+    survival.popsize(t+1) =  survival.popsize(t) - survival.deaths(t);
+end
+survival.time      = survival.age - 19;
+survival.deathrate = survival.deaths ./ survival.popsize;
+%fill in the last entry as death rate of 1
+survival
+plot(survival.time,survival.deathrate)
+
+
+
+%% Import these into a transition probability 3-d array
+P = zeros(4,4,periods);
+%P(:,:,t) is the transprob from t to t+1. 39 to 40 is last period where
+%guarnateed to survive in the next period
+P(:,1,1:39) = 1;
+
+
+size(P)
+% now fill in the ones that require the survival data 
+for t = 40:1:periods
+    Pt = survival.deathrate(survival.time == t);
+    %first row, probabilites for household wiht 2 survivors
+    P(1,2,t) = Pt * (1 - Pt);
+    P(1,3,t) = Pt * (1 - Pt);
+    P(1,4,t) = Pt^2         ;
+    P(1,1,t) = (1-Pt)^2     ;
+    
+    %rows 2 and 3 with one surviving member. 
+    P(2,4,t) =     Pt;
+    P(3,4,t) =     Pt;
+    P(2,2,t) = 1 - Pt;
+    P(3,3,t) = 1 - Pt;
+    
+    %during retirement, state 4 is permanent
+    P(4,:,t) = [0 0 0 1];
+end
+
+%clear P
+%P = zeros(4,4,60);
+%P(1,1,:) = 1;
+
+
+%% solve last period. 
+
+%% Setup some parameters, nyaa
+beta    = 0.98;
+r       = 0.04;
+ngrid   = 1001;
+Amin    = 1000;
+Amax    = 1000000;
+periods = 60;
+
+Ya      = [50000 * ones(40,1); zeros(20,1)];
+Yb      = [40000 * ones(40,1); zeros(20,1)];
+
+%% Setup Vectors owo
+%assets.matrix. fill in last columns backward 
+%know A_T+1 must == 0. thus we have it be one column longer desu
+Aold = A;
+clear A;
+A(:,periods:periods+1) = [ linspace(Amin,Amax,ngrid)' ,  zeros(ngrid,1) ];
+
+
+%needs an equation for each 
+%CA = 
+%in last period, consume all assetsn 
+%C(:,periods)    = A(:,periods) + Ya(periods) + Yb(periods) - A(:,periods+1)./(1+r);
+
+% using euler equations, pin down total consumption expenditures
+%C(:,periods-1)  = C(:,periods).*(1/beta/(1+r));
+
+%now pin down Assets in penultimate period
+%A(:,periods-1)  = A(:,periods) ./ (1+r) + C(:,periods-1) - Ya(periods-1) - Yb(periods-1);
+
+%now rewite this in a loop, desu!
+
+
+
+%for vectors CA CB Q: dim 1 is asset stream, dim2 time, 
+%for CAcounter is same but 3rd dim is each state
+% need counterfactual matrix for calculating expectations!
+thetavec = [0.1:0.2:0.9 0.99];
+for index = 1:1:6
+theta = thetavec(index)
+%consider first the case where both spouses never die
+% define S a vector of survival states. each row is a draw.columns are t
+S = ones(3,60);
+S(2,51:60)  = 2*ones(1,10);
+S(3,51:60)  = 3*ones(1,10);
+for state = 1:1:3
+
+
+t = 60
+
+%state 1    
+
+denom               = 0.4 * theta + 0.2 * (1-theta) + 0.6;
+CAcounter(:,t,1)    = 0.4 * theta       / denom .* A(:,t);
+CBcounter(:,t,1)    = 0.2 * (1 - theta) / denom .* A(:,t);
+CQcounter(:,t,1)    = 0.6               / denom .* A(:,t); 
+    
+%state 2
+CAcounter(:,t,2)    = 0.4 .* A(:,t);
+CBcounter(:,t,2)    =  0;
+CQcounter(:,t,2)    =  0.6 .* A(:,t); 
+    
+%state 3
+CAcounter(:,t,3) = 0;
+CBcounter(:,t,3) = 0.25.* A(:,t);
+CQcounter(:,t,3) = 0.75.* A(:,t); 
+
+%now fill in true value based on realized state 
+CA(:,t) = CAcounter(:,t,S(state,t));
+CB(:,t) = CBcounter(:,t,S(state,t));
+CQ(:,t) = CQcounter(:,t,S(state,t));
+
+
+for t = 59:-1:1
+%state 1  values for expectaiton 
+ECA(:,t,1) =    theta  * 0.4 ./ CAcounter(:,t+1,1) .* P(1,1,t)    + 0.4 ./ CAcounter(:,t+1,2) .* P(1,2,t);
+ECB(:,t,1) = (1-theta) * 0.2 ./ CBcounter(:,t+1,1) .* P(1,1,t)    + 0.2 ./ CAcounter(:,t+1,2) .* P(1,2,t);
+ECQ(:,t,1) =             0.6 ./ CQcounter(:,t+1,1) .* P(1,1,t)    + 0.6 ./ CQcounter(:,t+1,2) .* P(1,2,t)  + 0.6 ./ CQcounter(:,t+1,3) .* P(1,3,t);
+
+CAcounter(:,t,1) = 1 ./ (beta * (1+r) .* ECA(:,t,1)  ./      theta  / 0.4 );
+CBcounter(:,t,1) = 1 ./ (beta * (1+r) .* ECB(:,t,1)  ./ (1 - theta) / 0.2 );
+CQcounter(:,t,1) = 1 ./ (beta * (1+r) .* ECQ(:,t,1)  ./ 0.6 );
+ 
+%state 2 values
+ECA(:,t,2) = 0.4 ./ CAcounter(:,t+1,2) .* P(2,2,t);  
+ECB(:,t,2) =  0;
+ECQ(:,t,2) = 0.6 ./ CQcounter(:,t+1,2) .* P(2,2,t);
+    
+CAcounter(:,t,2) = 1 ./ (beta * (1+r) .* ECA(:,t,2)  ./      theta  / 0.4 );
+CBcounter(:,t,2) = 0                                               ;
+CQcounter(:,t,2) = 1 ./ (beta * (1+r) .* ECQ(:,t,2)  ./               0.6 );
+
+%state3 values
+ECA(:,t,3) = 0                                ;
+ECB(:,t,3) = 0.2 ./ CAcounter(:,t+1,3) .* P(3,3,t);                    
+ECQ(:,t,3) = 0.6 ./ CQcounter(:,t+1,3) .* P(3,3,t);
+    
+CAcounter(:,t,3) = 0                                                  ;
+CBcounter(:,t,3) = 1 ./ (beta * (1+r) .* ECB(:,t,3)  ./ (1- theta)  / 0.2 );
+CQcounter(:,t,3) = 1 ./ (beta * (1+r) .* ECQ(:,t,3)  ./ 0.6 );
+
+% fill in actual values
+CA(:,t) = CAcounter(:,t,S(state,t));
+CB(:,t) = CBcounter(:,t,S(state,t));
+CQ(:,t) = CQcounter(:,t,S(state,t));
+
+A(:,t)  = A(:,t+1) ./ (1+r) + CA(:,t)+ CB(:,t)+ CQ(:,t) - Ya(t) - Yb(t);
+
+end
+
+%% Now find the correct stream of assets and consumption
+%should be the one where once we work backward, we get assets are closes to
+%0 
+ismin = ( abs(A(:,1)) == min(abs(A(:,1))));
+ind = find(ismin)
+Astream = A(ind,:)';
+CAstream = CA(ind,:)';
+CBstream = CB(ind,:)';
+CQstream = CQ(ind,:)';
+Cstream  = CAstream + CBstream + CQstream;
+
+
+%% Now plot these 
+
+
+%[Astream [1:1:61]']
+
+%asset stream for both A and B
+plot(Astream)
+hold on
+plot([40 40],[min(Astream) max(Astream)])
+xlabel('Time')
+ylabel('Dollars')
+title(['Assets by Age, \theta = ',num2str(theta), ' Simulation ', num2str(state)])
+legend('Asset Holdings','Retirement Age','location','northwest')
+saveas(gcf,['Part C Assets Theta ',num2str(theta),' Simulation ',num2str(state),'.png'])
+close
+
+
+
+plot(Cstream)
+hold on 
+plot(CAstream)
+plot(CBstream)
+plot(CQstream)
+plot([40 40],[0 max(Cstream)])
+xlabel('Time')
+ylabel('Dollars')
+title(['Consumption by Age, \theta = ',num2str(theta), ' Simulation ', num2str(state)])
+legend('Total','c^A','c^B','Q','Retirement Age','location','northwest')
+saveas(gcf,['Part C Consumption Theta ',num2str(theta),' Simulation ',num2str(state),'.png'])
+close
+
+end
+end
+
+clear 
+clc
+
+%format long g
+
+%% Setup some parameters, nyaa
+beta    = 0.98;
+r       = 0.04;
+ngrid   = 1001;
+Amin    = 0;
+Amax    = 1000000;
+periods = 60;
+
+Ya      = [50000 * ones(40,1); zeros(20,1)];
+Yb      = [40000 * ones(40,1); zeros(20,1)];
+
+%% Setup Vectors owo
+%assets.matrix. fill in last columns backward 
+%know A_T+1 must == 0. thus we have it be one column longer desu
+A(:,periods:periods+1) = [ linspace(Amin,Amax,ngrid)' ,  zeros(ngrid,1) ];
+
+%% solve last period. just use C as a matrix containing TOTAL expenditures
+%rivially know that Ca Cb and Q are just fractions 0.2 0.2 and 0.6 of this
+
+%in last period, consume all assetsn 
+%C(:,periods)    = A(:,periods) + Ya(periods) + Yb(periods) - A(:,periods+1)./(1+r);
+
+% using euler equations, pin down total consumption expenditures
+%C(:,periods-1)  = C(:,periods).*(1/beta/(1+r));
+
+%now pin down Assets in penultimate period
+%A(:,periods-1)  = A(:,periods) ./ (1+r) + C(:,periods-1) - Ya(periods-1) - Yb(periods-1);
+
+%now rewite this in a loop, desu!
+
+for t = periods:-1:2
+    %in last period, consume all assetsn 
+    C(:,t)    = A(:,t) + Ya(t) + Yb(t) - A(:,t+1)./(1+r);
+
+    % using euler equations, pin down total consumption expenditures
+    C(:,t-1)  = C(:,t).*(1/beta/(1+r));
+
+    %now pin down Assets in penultimate period
+    A(:,t-1)  = A(:,t) ./ (1+r) + C(:,t-1) - Ya(t-1) - Yb(t-1); 
+end
+
+%% Now find the correct stream of assets and consumption
+%should be the one where once we work backward, we get assets are closes to
+%0 
+ismin = ( abs(A(:,1)) == min(abs(A(:,1))));
+index = find(ismin)
+Astream = A(index,:)';
+Cstream = C(index,:)';
+
+%total Cstream is same for both A and B. however, its subdivisions into
+% c_A c_B and Q differs between the problems
+
+%% Now plot these 
+
+Astream
+
+
+%asset stream for both A and B
+plot(Astream)
+hold on
+plot([40 40],[min(Astream) max(Astream)])
+xlabel('Time')
+ylabel('Dollars')
+title('Assets by Age')
+legend('Asset Holdings','Retirement Age','location','northwest')
+saveas(gcf,'Part A Assets.png')
+saveas(gcf,'Part B Assets.png')
+close
+
+%plot consumption in part A
+CstreamAA = 0.2*Cstream;
+CstreamAB = 0.2*Cstream;
+CstreamAQ = 0.6*Cstream;
+
+plot(Cstream)
+hold on 
+plot(CstreamAA)
+plot(CstreamAB)
+plot(CstreamAQ)
+plot([40 40],[0 max(Cstream)])
+xlabel('Time')
+ylabel('Dollars')
+title('Consumption by Age')
+%note c^A and c^B have same value so need to label accordingly...
+legend('Total','c^A and c^B','c^B','Q','Retirement Age','location','northwest')
+saveas(gcf,'Part A Consumption.png')
+close 
+
+% c stream in part B
+thetavec = [0.3:0.2:0.7];
+for index = 1:1:3
+    theta = thetavec(index)
+    denom = 0.3 * theta + 0.3 * (1-theta) + 0.7;
+    
+    CstreamBA = 0.3 * theta       / denom .* Cstream;
+    CstreamBB = 0.3 * (1 - theta) / denom .* Cstream;
+    CstreamBQ = 0.7               / denom .* Cstream;
+    
+    plot(Cstream)
+    hold on 
+    plot(CstreamBA)
+    plot(CstreamBB)
+    plot(CstreamBQ)
+    plot([40 40],[0 max(Cstream)])
+    xlabel('Time')
+    ylabel('Dollars')
+    title(['Consumption by Age, \theta = ',num2str(theta)])
+    %note c^A and c^B have same value so need to label accordingly...
+    legend('Total','c^A','c^B','Q','Retirement Age','location','northwest')
+    saveas(gcf,['Part B Consumption Theta ',num2str(theta),'.png'])
+    close
+end
+
+%% PART C
+
+ 
+
+survival = readtable('probability.xlsx')
+
+totaldeaths = sum(survival.deaths);
+tablesize = size(survival.age)
+survival.popsize(1) = totaldeaths;
+
+for t = 1:1:tablesize(1)-1
+    survival.popsize(t+1) =  survival.popsize(t) - survival.deaths(t);
+end
+survival.time      = survival.age - 19;
+survival.deathrate = survival.deaths ./ survival.popsize;
+%fill in the last entry as death rate of 1
+survival
+plot(survival.time,survival.deathrate)
+
+
+
+%% Import these into a transition probability 3-d array
+P = zeros(4,4,periods);
+%P(:,:,t) is the transprob from t to t+1. 39 to 40 is last period where
+%guarnateed to survive in the next period
+P(:,1,1:39) = 1;
+
+
+size(P)
+% now fill in the ones that require the survival data 
+for t = 40:1:periods
+    Pt = survival.deathrate(survival.time == t);
+    %first row, probabilites for household wiht 2 survivors
+    P(1,2,t) = Pt * (1 - Pt);
+    P(1,3,t) = Pt * (1 - Pt);
+    P(1,4,t) = Pt^2         ;
+    P(1,1,t) = (1-Pt)^2     ;
+    
+    %rows 2 and 3 with one surviving member. 
+    P(2,4,t) =     Pt;
+    P(3,4,t) =     Pt;
+    P(2,2,t) = 1 - Pt;
+    P(3,3,t) = 1 - Pt;
+    
+    %during retirement, state 4 is permanent
+    P(4,:,t) = [0 0 0 1];
+end
+
+%clear P
+%P = zeros(4,4,60);
+%P(1,1,:) = 1;
+
+
+%% solve last period. 
+
+%% Setup some parameters, nyaa
+beta    = 0.98;
+r       = 0.04;
+ngrid   = 1001;
+Amin    = 1000;
+Amax    = 1000000;
+periods = 60;
+
+Ya      = [50000 * ones(40,1); zeros(20,1)];
+Yb      = [40000 * ones(40,1); zeros(20,1)];
+
+%% Setup Vectors owo
+%assets.matrix. fill in last columns backward 
+%know A_T+1 must == 0. thus we have it be one column longer desu
+Aold = A;
+clear A;
+A(:,periods:periods+1) = [ linspace(Amin,Amax,ngrid)' ,  zeros(ngrid,1) ];
+
+
+%needs an equation for each 
+%CA = 
+%in last period, consume all assetsn 
+%C(:,periods)    = A(:,periods) + Ya(periods) + Yb(periods) - A(:,periods+1)./(1+r);
+
+% using euler equations, pin down total consumption expenditures
+%C(:,periods-1)  = C(:,periods).*(1/beta/(1+r));
+
+%now pin down Assets in penultimate period
+%A(:,periods-1)  = A(:,periods) ./ (1+r) + C(:,periods-1) - Ya(periods-1) - Yb(periods-1);
+
+%now rewite this in a loop, desu!
+
+
+
+%for vectors CA CB Q: dim 1 is asset stream, dim2 time, 
+%for CAcounter is same but 3rd dim is each state
+% need counterfactual matrix for calculating expectations!
+thetavec = [0.1:0.2:0.9 0.99];
+for index = 1:1:6
+theta = thetavec(index)
+%consider first the case where both spouses never die
+% define S a vector of survival states. each row is a draw.columns are t
+S = ones(3,60);
+S(2,51:60)  = 2*ones(1,10);
+S(3,51:60)  = 3*ones(1,10);
+for state = 1:1:3
+
+
+t = 60
+
+%state 1    
+
+denom               = 0.3 * theta + 0.3 * (1-theta) + 0.7;
+CAcounter(:,t,1)    = 0.3 * theta       / denom .* A(:,t);
+CBcounter(:,t,1)    = 0.3 * (1 - theta) / denom .* A(:,t);
+CQcounter(:,t,1)    = 0.7               / denom .* A(:,t); 
+    
+%state 2
+CAcounter(:,t,2)    = 0.3 .* A(:,t);
+CBcounter(:,t,2)    =  0;
+CQcounter(:,t,2)    =  0.7 .* A(:,t); 
+    
+%state 3
+CAcounter(:,t,3) = 0;
+CBcounter(:,t,3) = 0.3.* A(:,t);
+CQcounter(:,t,3) = 0.7.* A(:,t); 
+
+%now fill in true value based on realized state 
+CA(:,t) = CAcounter(:,t,S(state,t));
+CB(:,t) = CBcounter(:,t,S(state,t));
+CQ(:,t) = CQcounter(:,t,S(state,t));
+
+
+for t = 59:-1:1
+%state 1  values for expectaiton 
+ECA(:,t,1) =    theta  * 0.3 ./ CAcounter(:,t+1,1) .* P(1,1,t)    + 0.3 ./ CAcounter(:,t+1,2) .* P(1,2,t);
+ECB(:,t,1) = (1-theta) * 0.3 ./ CBcounter(:,t+1,1) .* P(1,1,t)    + 0.3 ./ CAcounter(:,t+1,2) .* P(1,2,t);
+ECQ(:,t,1) =             0.7 ./ CQcounter(:,t+1,1) .* P(1,1,t)    + 0.7 ./ CQcounter(:,t+1,2) .* P(1,2,t)  + 0.7 ./ CQcounter(:,t+1,3) .* P(1,3,t);
+
+CAcounter(:,t,1) = 1 ./ (beta * (1+r) .* ECA(:,t,1)  ./      theta  / 0.3 );
+CBcounter(:,t,1) = 1 ./ (beta * (1+r) .* ECB(:,t,1)  ./ (1 - theta) / 0.3 );
+CQcounter(:,t,1) = 1 ./ (beta * (1+r) .* ECQ(:,t,1)  ./ 0.7 );
+ 
+%state 2 values
+ECA(:,t,2) = 0.3 ./ CAcounter(:,t+1,2) .* P(2,2,t);  
+ECB(:,t,2) =  0;
+ECQ(:,t,2) = 0.3 ./ CQcounter(:,t+1,2) .* P(2,2,t);
+    
+CAcounter(:,t,2) = 1 ./ (beta * (1+r) .* ECA(:,t,2)  ./      theta  / 0.3 );
+CBcounter(:,t,2) = 0                                               ;
+CQcounter(:,t,2) = 1 ./ (beta * (1+r) .* ECQ(:,t,2)  ./               0.7 );
+
+%state3 values
+ECA(:,t,3) = 0                                ;
+ECB(:,t,3) = 0.3 ./ CAcounter(:,t+1,3) .* P(3,3,t);                    
+ECQ(:,t,3) = 0.7 ./ CQcounter(:,t+1,3) .* P(3,3,t);
+    
+CAcounter(:,t,3) = 0                                                  ;
+CBcounter(:,t,3) = 1 ./ (beta * (1+r) .* ECB(:,t,3)  ./ (1- theta)  / 0.3 );
+CQcounter(:,t,3) = 1 ./ (beta * (1+r) .* ECQ(:,t,3)  ./ 0.7 );
+
+% fill in actual values
+CA(:,t) = CAcounter(:,t,S(state,t));
+CB(:,t) = CBcounter(:,t,S(state,t));
+CQ(:,t) = CQcounter(:,t,S(state,t));
+
+A(:,t)  = A(:,t+1) ./ (1+r) + CA(:,t)+ CB(:,t)+ CQ(:,t) - Ya(t) - Yb(t);
+
+end
+
+%% Now find the correct stream of assets and consumption
+%should be the one where once we work backward, we get assets are closes to
+%0 
+ismin = ( abs(A(:,1)) == min(abs(A(:,1))));
+ind = find(ismin)
+Astream = A(ind,:)';
+CAstream = CA(ind,:)';
+CBstream = CB(ind,:)';
+CQstream = CQ(ind,:)';
+Cstream  = CAstream + CBstream + CQstream;
+
+
+%% Now plot these 
+
+
+%[Astream [1:1:61]']
+
+%asset stream for both A and B
+plot(Astream)
+hold on
+plot([40 40],[min(Astream) max(Astream)])
+xlabel('Time')
+ylabel('Dollars')
+title(['Assets by Age, \theta = ',num2str(theta), ' Simulation ', num2str(state)])
+legend('Asset Holdings','Retirement Age','location','northwest')
+saveas(gcf,['Part C Assets Theta_part D ',num2str(theta),' Simulation ',num2str(state),'.png'])
+close
+
+
+
+plot(Cstream)
+hold on 
+plot(CAstream)
+plot(CBstream)
+plot(CQstream)
+plot([40 40],[0 max(Cstream)])
+xlabel('Time')
+ylabel('Dollars')
+title(['Consumption by Age, \theta = ',num2str(theta), ' Simulation ', num2str(state)])
+legend('Total','c^A','c^B','Q','Retirement Age','location','northwest')
+saveas(gcf,['Part C Consumption Theta_Part D ',num2str(theta),' Simulation ',num2str(state),'.png'])
+close
+
+end
+end
+
+
