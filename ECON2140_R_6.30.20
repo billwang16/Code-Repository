@@ -1,0 +1,1242 @@
+#clean memory
+rm(list=ls())
+
+#load packages
+library(ggplot2)
+library(data.table)
+library(readxl)
+library(rlang)
+library(plyr)
+library(rowr)
+library(MASS)
+library(glmnet)
+library(neuralnet)
+library(rpart)
+library(rmarkdown)
+library(broom)
+library(dplyr)
+library(rstatix)
+library(xtable)
+library(stargazer)
+
+#import data
+xl_data <- "C:/Users/BillW/Documents/Spring 2020/ECON2140/Pset 5 Data/Pset 5 Data/Simplified JTPA Data.csv"
+jtpa <- as.matrix(read.csv(file = xl_data))
+
+View(jtpa)
+colnames(jtpa)
+
+#c) 
+#whole sample
+result <- tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa))
+#men
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1))))
+#women
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0))))
+#married
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X4..married==1))))
+#unmarried
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X4..married==0))))
+#age 22-25
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X8..age2225==1))))
+#age 26-29
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X9..age2629==1))))
+#age 30-35
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X10..age3035==1))))
+#age 36-44
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X11..age3644==1))))
+#age 45-54
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X12..age4554==1))))
+#men x married x 22-25
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==1 & X8..age2225==1))))
+#women x married x 22-25
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==1 & X8..age2225==1))))
+#men x unmarried x 22-25
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==0 & X8..age2225==1))))
+#women x unmarried x 22-25
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==0 & X8..age2225==1))))
+#men x married x 26-29
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==1 & X9..age2629==1))))
+#women x married x 26-29
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==1 & X9..age2629==1))))
+#men x unmarried x 26-29
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==0 & X9..age2629==1))))
+#women x unmarried x 26-29
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==0 & X9..age2629==1))))
+#men x married x 30-35
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==1 & X10..age3035==1))))
+#women x married x 30-35
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==1 & X10..age3035==1))))
+#men x unmarried x 30-35
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==0 & X10..age3035==1))))
+#women x unmarried x 30-35
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==0 & X10..age3035==1))))
+#men x married x 36-44
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==1 & X11..age3644==1))))
+#women x married x 36-44
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==1 & X11..age3644==1))))
+#men x unmarried x 36-44
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==0 & X11..age3644==1))))
+#women x unmarried x 36-44
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==0 & X11..age3644==1))))
+#men x married x 45-54
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==1 & X12..age4554==1))))
+#women x married x 45-54
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==1 & X12..age4554==1))))
+#men x unmarried x 45-54
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1 & X4..married==0 & X12..age4554==1))))
+#women x unmarried x 45-54
+result <- rbind(result,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0 & X4..married==0 & X12..age4554==1))))
+
+#export results
+print(xtable(result),type = "latex", file = "C:/Users/BillW/Documents/Spring 2020/ECON2140/result.tex")
+
+#d) 
+bonferroni <- as.matrix(adjust_pvalue(result, p.col = "p.value", output.col = "bonferroni", method = "bonferroni"))
+
+#export results
+print(xtable(bonferroni),type = "latex", file = "C:/Users/BillW/Documents/Spring 2020/ECON2140/bonferroni.tex")
+
+#e)
+samples <- list()
+
+for (i in 1:10000){
+samples[[i]] <- matrix(ncol=18, nrow=0)
+sample_matrix = jtpa[sample(1:nrow(jtpa),9212,replace = TRUE, prob = NULL),]
+random_z <- as.matrix(sample(0:1,9212,replace = TRUE, prob = NULL))
+colnames(random_z) <- "Z_random"
+sample_matrix <- cbind(sample_matrix, random_z)
+samples[[i]] <- rbind(samples[[i]],sample_matrix)
+}
+
+#f) 
+result_samples <- list()
+
+for (i in 1:10000){
+  result_samples[[i]] <- matrix(ncol=30, nrow=0)
+}
+
+for (i in 1:10000){
+#whole sample
+result_samples[[i]] <- tidy(t.test(Y..income~Z_random, data=samples[[i]]))
+#men
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1))))
+#women
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0))))
+#married
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X4..married==1))))
+#unmarried
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X4..married==0))))
+#age 22-25
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X8..age2225==1))))
+#age 26-29
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X9..age2629==1))))
+#age 30-35
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X10..age3035==1))))
+#age 36-44
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X11..age3644==1))))
+#age 45-54
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X12..age4554==1))))
+#men x married x 22-25
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==1 & X8..age2225==1))))
+#women x married x 22-25
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==1 & X8..age2225==1))))
+#men x unmarried x 22-25
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==0 & X8..age2225==1))))
+#women x unmarried x 22-25
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==0 & X8..age2225==1))))
+#men x married x 26-29
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==1 & X9..age2629==1))))
+#women x married x 26-29
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==1 & X9..age2629==1))))
+#men x unmarried x 26-29
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==0 & X9..age2629==1))))
+#women x unmarried x 26-29
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==0 & X9..age2629==1))))
+#men x married x 30-35
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==1 & X10..age3035==1))))
+#women x married x 30-35
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==1 & X10..age3035==1))))
+#men x unmarried x 30-35
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==0 & X10..age3035==1))))
+#women x unmarried x 30-35
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==0 & X10..age3035==1))))
+#men x married x 36-44
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==1 & X11..age3644==1))))
+#women x married x 36-44
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==1 & X11..age3644==1))))
+#men x unmarried x 36-44
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==0 & X11..age3644==1))))
+#women x unmarried x 36-44
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==0 & X11..age3644==1))))
+#men x married x 45-54
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==1 & X12..age4554==1))))
+#women x married x 45-54
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==1 & X12..age4554==1))))
+#men x unmarried x 45-54
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==1 & X4..married==0 & X12..age4554==1))))
+#women x unmarried x 45-54
+result_samples[[i]] <- rbind(result_samples[[i]],tidy(t.test(Y..income~Z_random, data=samples[[i]], subset(samples[[i]],X14..male.dummy==0 & X4..married==0 & X12..age4554==1))))
+}
+
+View(result_samples[[500]])
+
+
+#number of null hypothesis rejected
+for (i in 1:10000){
+result_samples[[i]]$reject <- 0
+result_samples[[i]]$reject[result_samples[[i]]$p.value <= 0.05] <- 1
+}
+
+num_rejected <- matrix(nrow = 10000, ncol = 1)
+for (i in 1:10000){
+num_rejected[i,1] <- sum(result_samples[[i]]$reject)
+}
+
+mean(num_rejected)
+
+
+#if at least one null hypothesis rejected
+one_rejected <- matrix(nrow = 10000, ncol = 1)
+for (i in 1:10000){
+  one_rejected[i,1] <- 0
+  one_rejected[i,1][num_rejected[i,1] > 0] <- 1
+}
+
+mean(one_rejected)
+
+#g)
+bonferroni_samples <- list()
+
+for (i in 1:10000){
+bonferroni_samples[[i]] <- as.matrix(adjust_pvalue(result_samples[[i]], p.col = "p.value", output.col = "bonferroni", method = "bonferroni"))
+}
+
+
+#number of null hypothesis rejected
+for (i in 1:10000){
+  bonferroni_samples[[i]]$reject <- 0
+  bonferroni_samples[[i]]$reject[bonferroni_samples[[i]]$bonferroni <= 0.05] <- 1
+}
+
+num_rejected_b <- matrix(nrow = 10000, ncol = 1)
+for (i in 1:10000){
+  num_rejected_b[i,1] <- sum(bonferroni_samples[[i]]$reject)
+}
+
+
+#if at least one null hypothesis rejected
+one_rejected_b <- matrix(nrow = 10000, ncol = 1)
+for (i in 1:10000){
+  one_rejected_b[i,1] <- 0
+  one_rejected_b[i,1][num_rejected_b[i,1] > 0] <- 1
+}
+
+mean(one_rejected_b)
+
+#h)
+min_p <- matrix(nrow = 10000, ncol = 1)
+for (i in 1:10000){
+  min_p[i,1] <- min(result_samples[[i]]$p.value)
+}
+
+quantile(min_p,0.05)
+
+
+#i)
+#whole sample
+result_noint <- tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa))
+#men
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==1))))
+#women
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X14..male.dummy==0))))
+#married
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X4..married==1))))
+#unmarried
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X4..married==0))))
+#age 22-25
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X8..age2225==1))))
+#age 26-29
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X9..age2629==1))))
+#age 30-35
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X10..age3035==1))))
+#age 36-44
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X11..age3644==1))))
+#age 45-54
+result_noint <- rbind(result_noint,tidy(t.test(Y..income~Z..assigned.to.training, data=jtpa, subset(jtpa,X12..age4554==1))))
+
+bonferroni_noint <- as.matrix(adjust_pvalue(result_noint, p.col = "p.value", output.col = "bonferroni", method = "bonferroni"))
+
+#export results
+print(xtable(bonferroni_noint),type = "latex", file = "C:/Users/BillW/Documents/Spring 2020/ECON2140/bonferroni_noint.tex")
+
+########
+
+#install.packages("MASS")
+#library(MASS)
+
+sims = c(1:10^4);
+
+HornungData = as.matrix(Hornung.Data);
+HornungData <- apply(HornungData,1,as.numeric);
+HornungData <- t(HornungData);
+HornungData = HornungData[-c(1),];
+HornungData = as.matrix(HornungData);
+
+Y = HornungData[,1];
+D = HornungData[,2];
+X = HornungData[,3:13];
+Z = HornungData[,14];
+ID = HornungData[,15];
+n = length(Y);
+
+R = cbind(D, X);
+Rz = cbind(Z, X);
+
+betahat = solve(t(Rz)%*%R)%*%t(Rz)%*%Y;
+
+epsilon = Y - R%*%betahat;
+var_base = matrix(epsilon, nrow = nrow(epsilon), ncol = ncol(Rz))*Rz;
+Omegahat = t(var_base)%*%var_base/n;
+G = t(Rz)%*%R/n;
+Vhat = solve((t(G)%*%solve(Omegahat)%*%G))/n;
+se = sqrt(Vhat[1,1]);
+t_iid = (betahat[1]-0)/sqrt(Vhat[1,1]);
+CI = c(betahat[1]-1.96*se, betahat[1]+1.96*se);
+
+# Clustered Data
+source("Pset_6_Clustered_Covariance_Estimate.R")
+Omegahat = Clustered_covariance_estimate(var_base,ID);
+Vhat = solve(t(G)%*%solve(Omegahat)%*%G)/n;
+se_cluster = sqrt(Vhat[1,1]);
+t_cluster = (betahat[1]-0)/sqrt(Vhat[1,1]);
+CI_cluster = c(betahat[1]-1.96*se_cluster, betahat[1]+1.96*se_cluster);
+
+uniqueID = unique(ID);
+
+data = cbind(Y, D, X, Z);
+
+## Implement iid bootstrap
+beta_store_iid = matrix(NA, 10^4, 1);
+t_store_iid = matrix(NA, 10^4, 1);
+
+for (s in sims) {
+  draw = sample(length(Y),length(Y),replace = TRUE);
+  
+  data_sim <- data[draw,];
+  nsim = nrow(data_sim);
+  
+  Y_sim <- data_sim[,1];
+  D_sim <- data_sim[,2];
+  X_sim <- data_sim[,3:13];
+  Z_sim <- data_sim[,14];
+  
+  R <- cbind(D_sim, X_sim);
+  Rz <- cbind(Z_sim, X_sim);
+  
+  betahat_sim <- solve(t(Rz)%*%R)%*%t(Rz)%*%Y_sim;
+  beta_store_iid[s,1] = betahat_sim[1];
+  
+  epsilon_sim = Y_sim - R%*%betahat_sim;
+  var_base <- matrix(epsilon_sim, nrow = nrow(epsilon_sim), ncol = ncol(Rz))*Rz;
+  Omegahat_sim = t(var_base)%*%var_base/nsim;
+  G_sim = t(Rz)%*%R/nsim;
+  Vhat_sim = solve((t(G_sim)%*%solve(Omegahat_sim)%*%G_sim));
+  t_store_iid[s,1] = sqrt(nsim)*(betahat_sim[1]-betahat[1])/sqrt(Vhat_sim[1,1]);
+}
+
+percentile_interal = c(quantile(beta_store_iid, 0.025, na.rm = FALSE), quantile(beta_store_iid, 0.975, na.rm = FALSE));
+t_interval = c(betahat[1] - se*quantile(t_store_iid, 0.975, na.rm = FALSE), betahat[1] - se*quantile(t_store_iid, 0.025, na.rm = FALSE));
+
+## Implement Clustered bootstrap
+beta_store_cluster = matrix(NA, 10^4, 1);
+t_store_cluster = matrix(NA, 10^4, 1);
+
+for (s in sims) {
+  draw = sample(length(uniqueID),length(uniqueID),replace = TRUE);
+  
+  data_sim = data[ID==uniqueID[draw[1]],];
+  ID_draw = matrix(1,sum(ifelse(ID==uniqueID[draw[1]],1,0)),1);
+  n_draw = length(draw);
+  for (m in c(2:n_draw)) {
+    if (sum(ifelse(ID==uniqueID[draw[m]],1,0))==1) {
+      increment = t(as.matrix(data[ID==uniqueID[draw[m]],]))
+    }
+    else {
+      increment = as.matrix(data[ID==uniqueID[draw[m]],]);
+    }
+    
+    data_sim = rbind(data_sim,increment);
+    n_increment = nrow(increment);
+    ID_draw = rbind(ID_draw,matrix(m ,nrow = n_increment ,1));
+  }
+  nsim = nrow(data_sim)
+  
+  Y_sim = as.matrix(data_sim[,1]);
+  D_sim = as.matrix(data_sim[,2]);
+  X_sim = as.matrix(data_sim[,3:13]);
+  Z_sim = as.matrix(data_sim[,14]);
+  
+  R = cbind(D_sim, X_sim);
+  Rz = cbind(Z_sim, X_sim);
+  
+  betahat_sim = ginv(t(Rz)%*%R)%*%t(Rz)%*%Y_sim;
+  beta_store_cluster[s,1] = betahat_sim[1];
+  
+  epsilon_sim = Y_sim - R%*%betahat_sim;
+  var_base = matrix(epsilon_sim, nrow = nrow(epsilon_sim), ncol = ncol(Rz))*Rz;
+  Omegahat_sim = Clustered_covariance_estimate(var_base, ID_draw);
+  G_sim = t(Rz)%*%R/nsim;
+  Vhat_sim = ginv(t(G_sim)%*%ginv(Omegahat_sim)%*%G_sim);
+  t_store_cluster[s,1] = sqrt(nsim)*(betahat_sim[1]-betahat[1])/sqrt(Vhat_sim[1,1]);
+}
+
+t_store_cluster = Re(t_store_cluster); #Eliminate complex vlaues
+
+Percentile_interval_cluster = c(quantile(beta_store_cluster, 0.025, na.rm = FALSE), quantile(beta_store_cluster, 0.975, na.rm = FALSE));
+t_interval_cluster = c(betahat[1] - se*quantile(t_store_cluster, 0.975, na.rm = FALSE), betahat[1] - se*quantile(t_store_cluster, 0.025, na.rm = FALSE));
+
+######
+
+#c)
+theta_0 <- c(1,1)
+d <- c(6,1)
+theta <- matrix(ncol = 2, nrow = 0)
+a <- 0
+
+for (i in 1:100000){
+epsilon <-  rmvnorm(n=1, mean=c(0,0), sigma=0.25*diag(2), method="chol")
+xi <- theta_0 + epsilon
+mu_xi <- c(xi[1]*xi[2], xi[1]/xi[2])
+mu_theta <- c(theta_0[1]*theta_0[2],theta_0[1]/theta_0[2])
+f_xi <- dmvnorm(d, mean = mu_xi, sigma = diag(2), log = FALSE)
+f_theta <- dmvnorm(d, mean = mu_theta, sigma = diag(2), log = FALSE)
+pi_theta <- dmvnorm(theta_0, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+pi_xi <- dmvnorm(xi, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+rho <- (f_xi*pi_xi)/(f_theta*pi_theta)
+u <- runif(1,min=0,max=1)
+
+if(is.na(rho) > 0){
+  
+} else if(u <= rho){
+theta_0 <- xi
+a <- a + 1
+} 
+else
+{
+}
+theta <- rbind(theta,theta_0)
+}
+
+View(theta)
+colnames(theta) <- c("theta_1", "theta_2")
+
+#acceptance rate, mean, standard deviation, correlation, trace plot
+accept <- a/100000
+
+burn_in <- tail(theta, n=1000)
+
+mean(burn_in[,1])
+mean(burn_in[,2])
+
+sd(burn_in[,1])
+sd(burn_in[,2])
+
+cor(burn_in)
+
+traplot(theta)
+
+#d)
+theta_0_neg <- c(-1,-1)
+theta_neg <- matrix(ncol = 2, nrow = 0)
+a_neg <- 0
+
+for (i in 1:100000){
+  epsilon <-  rmvnorm(n=1, mean=c(0,0), sigma=0.25*diag(2), method="chol")
+  xi <- theta_0_neg + epsilon
+  mu_xi <- c(xi[1]*xi[2], xi[1]/xi[2])
+  mu_theta <- c(theta_0_neg[1]*theta_0_neg[2],theta_0_neg[1]/theta_0_neg[2])
+  f_xi <- dmvnorm(d, mean = mu_xi, sigma = diag(2), log = FALSE)
+  f_theta <- dmvnorm(d, mean = mu_theta, sigma = diag(2), log = FALSE)
+  pi_theta <- dmvnorm(theta_0_neg, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  pi_xi <- dmvnorm(xi, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  rho <- (f_xi*pi_xi)/(f_theta*pi_theta)
+  u <- runif(1,min=0,max=1)
+  
+  if(is.na(rho) > 0){
+    
+  } else if(u <= rho){
+    theta_0_neg <- xi
+    a_neg <- a_neg + 1
+  } 
+  else
+  {
+  }
+  theta_neg <- rbind(theta_neg,theta_0_neg)
+}
+
+View(theta_neg)
+colnames(theta_neg) <- c("theta_1", "theta_2")
+
+#acceptance rate, mean, standard deviation, correlation, trace plot
+accept_neg <- a_neg/100000
+
+burn_in_neg <- tail(theta_neg, n=1000)
+
+mean(burn_in_neg[,1])
+mean(burn_in_neg[,2])
+
+sd(burn_in_neg[,1])
+sd(burn_in_neg[,2])
+
+cor(burn_in_neg)
+
+traplot(theta_neg)
+
+#e)
+theta_0_var <- c(1,1)
+theta_var <- matrix(ncol = 2, nrow = 0)
+a_var <- 0
+
+for (i in 1:100000){
+  epsilon_var <-  rmvnorm(n=1, mean=c(0,0), sigma=9*diag(2), method="chol")
+  xi <- theta_0_var + epsilon_var
+  mu_xi <- c(xi[1]*xi[2], xi[1]/xi[2])
+  mu_theta <- c(theta_0_var[1]*theta_0_var[2],theta_0_var[1]/theta_0_var[2])
+  f_xi <- dmvnorm(d, mean = mu_xi, sigma = diag(2), log = FALSE)
+  f_theta <- dmvnorm(d, mean = mu_theta, sigma = diag(2), log = FALSE)
+  pi_theta <- dmvnorm(theta_0_var, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  pi_xi <- dmvnorm(xi, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  rho <- (f_xi*pi_xi)/(f_theta*pi_theta)
+  u <- runif(1,min=0,max=1)
+  
+  if(is.na(rho) > 0){
+    
+  } else if(u <= rho){
+    theta_0_var <- xi
+    a_var <- a_var + 1
+  } 
+  else
+  {
+  }
+  theta_var <- rbind(theta_var,theta_0_var)
+}
+
+View(theta_var)
+colnames(theta_var) <- c("theta_1", "theta_2")
+
+#acceptance rate, mean, standard deviation, correlation, trace plot
+accept_var <- a_var/100000
+
+burn_in_var <- tail(theta_var, n=1000)
+
+mean(burn_in_var[,1])
+mean(burn_in_var[,2])
+
+sd(burn_in_var[,1])
+sd(burn_in_var[,2])
+
+cor(burn_in_var)
+
+traplot(theta_var)
+
+#f)
+xy <- as.matrix(expand.grid((-50:50)/10 , (-50:50)/10))
+
+z <- c()
+
+for (i in 1:nrow(xy)){
+mu <- c(xy[i,1]*xy[i,2], xy[i,1]/xy[i,2])
+prob <- dmvnorm(mu, mean = d, sigma = diag(2), log = FALSE)*dmvnorm(c(xy[i,1],xy[i,2]), mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+z <- rbind(z,prob)
+}
+
+contour <- as.data.frame(cbind(xy,z))
+names(contour) <- c("theta_1","theta_2","z")
+View(contour)
+
+contourplot <- ggplot(contour, aes(theta_1,theta_2,z=z)) + geom_contour_filled() + scale_x_continuous(expand=c(0,0)) + scale_y_continuous(expand=c(0,0)) + labs(x='theta1',y='theta2', fill='PDF')
+print(contourplot)
+
+#####
+
+#d)
+#construct data moments
+gamma_0 <- 0
+gamma_1 <- 0.5
+n <- 50
+t <- 10
+U <- matrix(nrow = 50, ncol = 11)
+
+#generate U_0
+U_0 <- rnorm(50, gamma_0/(1-gamma_1), 1/(1- gamma_1^2))
+U[,1] <- U_0
+
+#generate epsilon
+e <-  rmvnorm(n=50, mean=rep(0,10), sigma=diag(10), method="chol")
+
+#generate U_1 to U_10
+for (i in 1:10){
+U[,i+1] <- gamma_0 + gamma_1%*%U[,i] + e[,i]
+}
+
+#generate Y_0 to Y_10
+Y <- matrix(nrow = 50, ncol = 11)
+
+for (i in 1:11){
+  for (j in 1:50){
+    if(U[j,i] > 0){
+    Y[j,i] = 1
+    }
+    else{
+    Y[j,i] = 0  
+    }
+  }  
+}
+
+#generate Y_t*Y_t-1 and Y_t*Y_t-2
+Y_minus1 <- matrix(nrow = 50, ncol = 10)
+Y_minus2 <- matrix(nrow = 50, ncol = 9)
+
+for (i in 1:10){
+  for (j in 1:50){
+    Y_minus1[j,i] <- Y[j,i+1]*Y[j,i]
+  }
+}
+
+for (i in 1:9){
+  for (j in 1:50){
+    Y_minus2[j,i] <- Y[j,i+2]*Y[j,i]
+  }
+}
+
+#construct moments
+m_data <- matrix(nrow = 50, ncol = 3)
+
+m_data[,1] <- rowMeans(Y)  
+m_data[,2] <- rowMeans(Y_minus1)
+m_data[,3] <- rowMeans(Y_minus2)
+
+#construct simulation moments
+gamma_1s <- as.matrix(seq(0,0.9,0.01))
+U_s <- list()
+
+for (i in 1:91){
+  U_s[[i]] <- matrix(nrow = 50, ncol = 11)
+}
+
+#generate U_0s
+for (i in 1:91){
+U_0 <- rnorm(50, gamma_0/(1-gamma_1s[i,1]), 1/(1- gamma_1s[i,1]^2))
+U_s[[i]][,1] <- U_0
+}
+
+#generate epsilon
+e_s <-  rmvnorm(n=50, mean=rep(0,10), sigma=diag(10), method="chol")
+
+#generate U_1s to U_10s
+for (j in 1:91){
+for (i in 1:10){
+  U_s[[j]][,i+1] <- gamma_0 + gamma_1s[j,1]%*%U_s[[j]][,i] + e_s[,i]
+}
+}
+
+#generate Y_0s to Y_10s
+Y_s <- list()
+
+for (i in 1:91){
+Y_s[[i]] <- matrix(nrow = 50, ncol = 11)
+}
+
+for (k in 1:91){
+for (i in 1:11){
+  for (j in 1:50){
+    if(U_s[[k]][j,i] > 0){
+      Y_s[[k]][j,i] = 1
+    }
+    else{
+      Y_s[[k]][j,i] = 0  
+    }
+  }  
+}
+}
+
+#generate Y_ts*Y_t-1s and Y_ts*Y_t-2s
+Y_minus1s <- list()
+Y_minus2s <- list()
+
+for (i in 1:91){
+Y_minus1s[[i]] <- matrix(nrow = 50, ncol = 10)
+}
+
+for (i in 1:91){
+Y_minus2s[[i]] <- matrix(nrow = 50, ncol = 9)
+}
+
+for (k in 1:91){
+for (i in 1:10){
+  for (j in 1:50){
+    Y_minus1s[[k]][j,i] <- Y_s[[k]][j,i+1]*Y_s[[k]][j,i]
+  }
+}
+}
+
+for (k in 1:91){
+for (i in 1:9){
+  for (j in 1:50){
+      Y_minus2s[[k]][j,i] <- Y_s[[k]][j,i+2]*Y_s[[k]][j,i]
+  }
+}
+}
+
+
+#construct moments
+m_s <- list()
+
+for (i in 1:91){
+m_s[[i]] <- matrix(nrow = 50, ncol = 3)
+}
+
+for (i in 1:91){
+m_s[[i]][,1] <- rowMeans(Y_s[[i]])  
+m_s[[i]][,2] <- rowMeans(Y_minus1s[[i]])
+m_s[[i]][,3] <- rowMeans(Y_minus2s[[i]])
+}
+
+#calculate g(D_i,\gamma)
+g <- list()
+
+for (i in 1:91){
+  g[[i]] <- matrix(nrow = 50, ncol = 3)
+}
+
+for (i in 1:91){
+  g[[i]] <- m_data - m_s[[i]]
+}
+
+g_n <- matrix(nrow = 91, ncol = 3)
+
+for (i in 1:91){
+g_n[i,] <- colMeans(g[[i]])
+}
+
+#calculate Q_n
+Q <- matrix(nrow = 91, ncol = 1)
+
+var_g <- list()
+
+for (i in 1:91){
+  var_g[[i]] <- as.matrix(var(g[[i]]))
+}
+
+
+for (i in 1:91){
+  Q[i,1] <- (1/2)*t(g_n[i,])%*%var_g[[i]]%*%g_n[i,]
+}
+
+gamma_df <- as.data.frame(gamma_1s)
+Q_df <- as.data.frame(Q)
+Q_plot <- cbind(Q_df,gamma_df)
+names(Q_plot) <- c("Q_n","gamma_1")
+
+ggplot(Q_plot, aes(x=gamma_1, y=Q_n)) + geom_line() + geom_point()
+
+#f) 
+#define initial values
+gamma_i <- matrix(nrow = 1, ncol = 2)
+gamma_i[1,] <- c(0,0)
+
+#define acceptance 
+a <- 0
+
+#matrix to store gamma
+gamma <- c()
+
+#matrices to store U, Y, m, g
+U_g <- matrix(nrow = 50, ncol = 11)
+Y_g <- matrix(nrow = 50, ncol = 11)
+Yminus1_g <- matrix(nrow = 50, ncol = 10)
+Yminus2_g <- matrix(nrow = 50, ncol = 9)
+m_g <- matrix(nrow = 50, ncol = 3)
+g_g <- matrix(nrow = 50, ncol = 3)
+
+#MCMC
+for (k in 1:100000){
+  epsilon <-  rmvnorm(n=1, mean=c(0,0), sigma=0.04*diag(2), method="chol")
+  xi <- gamma_i + epsilon
+  
+#calculate Q_n for gamma_i
+  #construct simulation moments
+  U_0 <- rnorm(50, gamma_i[1,1]/(1-gamma_i[1,2]), abs(1/(1- gamma_i[1,2]^2)))
+    U_g[,1] <- U_0
+
+  
+  #generate U_1s to U_10s
+    for (i in 1:10){
+      U_g[,i+1] <- gamma_i[1,1] + gamma_i[1,2]%*%U_g[,i] + e_s[,i]
+    }
+  
+  #generate Y_0s to Y_10s
+    for (i in 1:11){
+      for (j in 1:50){
+        if(U_g[j,i] > 0){
+          Y_g[j,i] = 1
+        }
+        else{
+          Y_g[j,i] = 0  
+        }
+      }  
+    }
+  
+  #generate Y_ts*Y_t-1s and Y_ts*Y_t-2s
+    for (i in 1:10){
+      for (j in 1:50){
+        Yminus1_g[j,i] <- Y_g[j,i+1]*Y_g[j,i]
+      }
+    }
+  
+    for (i in 1:9){
+      for (j in 1:50){
+        Yminus2_g[j,i] <- Y_g[j,i+2]*Y_g[j,i]
+      }
+    }
+  
+  
+  #construct moments
+    m_g[,1] <- rowMeans(Y_g)  
+    m_g[,2] <- rowMeans(Yminus1_g)
+    m_g[,3] <- rowMeans(Yminus2_g)
+  
+  #calculate g(D_i,\gamma)
+  g_g <- m_data - m_g
+  g_ng<- colMeans(g_g)
+  
+  #calculate Q_n
+  var_gg <- as.matrix(var(g_g))
+
+  Q_g <- (1/2)*t(g_ng)%*%var_gg%*%g_ng
+  
+  #calculate f(gamma)
+  f_gamma <- exp(-50*Q_g)
+  
+#calculate Q_n for xi
+  #construct simulation moments
+  U_0 <- rnorm(50, xi[1,1]/(1-xi[1,2]), abs(1/(1- xi[1,2]^2)))
+  U_g[,1] <- U_0
+
+  #generate U_1s to U_10s
+  for (i in 1:10){
+    U_g[,i+1] <- xi[1,1] + xi[1,2]%*%U_g[,i] + e_s[,i]
+  }
+  
+  #generate Y_0s to Y_10s
+  for (i in 1:11){
+    for (j in 1:50){
+      if(U_g[j,i] > 0){
+        Y_g[j,i] = 1
+      }
+      else{
+        Y_g[j,i] = 0  
+      }
+    }  
+  }
+  
+  #generate Y_ts*Y_t-1s and Y_ts*Y_t-2s
+  for (i in 1:10){
+    for (j in 1:50){
+      Yminus1_g[j,i] <- Y_g[j,i+1]*Y_g[j,i]
+    }
+  }
+  
+  for (i in 1:9){
+    for (j in 1:50){
+      Yminus2_g[j,i] <- Y_g[j,i+2]*Y_g[j,i]
+    }
+  }
+  
+  
+  #construct moments
+    m_g[,1] <- rowMeans(Y_g)  
+    m_g[,2] <- rowMeans(Yminus1_g)
+    m_g[,3] <- rowMeans(Yminus2_g)
+  
+  #calculate g(D_i,\gamma)
+  g_g <- m_data - m_g
+  g_ng<- colMeans(g_g)
+  
+  #calculate Q_n
+  var_gg <- as.matrix(var(g_g))
+  
+  Q_g <- (1/2)*t(g_ng)%*%var_gg%*%g_ng
+  
+  #calculate f(gamma)
+  f_xi <- exp(-50*Q_g)
+
+  #calculate pi
+  pi_gamma <- dmvnorm(gamma_i, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  pi_xi <- dmvnorm(xi, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  
+  
+  rho <- (f_xi*pi_xi)/(f_gamma*pi_gamma)
+  u <- runif(1,min=0,max=1)
+  
+  if(is.na(rho) > 0){
+    
+  } else if(u <= rho){
+    gamma_i <- xi
+    a <- a + 1
+  } 
+  else
+  {
+  }
+  gamma <- rbind(gamma,gamma_i)
+}
+
+#remove burn-in
+gamma <- tail(gamma, 99000)
+
+#traceplot
+colnames(gamma) <- c("gamma_0","gamma_1")
+traplot(gamma)
+
+#histogram
+hist(gamma[,1],main = paste("Histogram of gamma_0"), xlab = "gamma_0")
+hist(gamma[,2],main = paste("Histogram of gamma_1"), xlab = "gamma_1")
+
+#scatterplot
+plot(gamma[,1],gamma[,2],main="Scatterplot of gamma_0 and gamma_1", xlab="gamma_0 ", ylab="gamma_1")
+
+#g)
+#recreate data with n=500
+n2 <- 500
+U2 <- matrix(nrow = 500, ncol = 11)
+
+#generate U_0
+U_0 <- rnorm(500, gamma_0/(1-gamma_1), 1/(1- gamma_1^2))
+U2[,1] <- U_0
+
+#generate epsilon
+e2 <-  rmvnorm(n=500, mean=rep(0,10), sigma=diag(10), method="chol")
+
+#generate U_1 to U_10
+for (i in 1:10){
+  U2[,i+1] <- gamma_0 + gamma_1%*%U2[,i] + e[,i]
+}
+
+#generate Y_0 to Y_10
+Y2 <- matrix(nrow = 500, ncol = 11)
+
+for (i in 1:11){
+  for (j in 1:500){
+    if(U2[j,i] > 0){
+      Y2[j,i] = 1
+    }
+    else{
+      Y2[j,i] = 0  
+    }
+  }  
+}
+
+#generate Y_t*Y_t-1 and Y_t*Y_t-2
+Y2_minus1 <- matrix(nrow = 500, ncol = 10)
+Y2_minus2 <- matrix(nrow = 500, ncol = 9)
+
+for (i in 1:10){
+  for (j in 1:500){
+    Y2_minus1[j,i] <- Y2[j,i+1]*Y2[j,i]
+  }
+}
+
+for (i in 1:9){
+  for (j in 1:500){
+    Y2_minus2[j,i] <- Y2[j,i+2]*Y2[j,i]
+  }
+}
+
+#construct moments
+m2_data <- matrix(nrow = 500, ncol = 3)
+
+m2_data[,1] <- rowMeans(Y2)  
+m2_data[,2] <- rowMeans(Y2_minus1)
+m2_data[,3] <- rowMeans(Y2_minus2)
+
+#define initial values
+gamma_i <- matrix(nrow = 1, ncol = 2)
+gamma_i[1,] <- c(0,0)
+
+#define acceptance 
+a2 <- 0
+
+#matrix to store gamma
+gamma2 <- c()
+
+#matrices to store U, Y, m, g
+U2_g <- matrix(nrow = 500, ncol = 11)
+Y2_g <- matrix(nrow = 500, ncol = 11)
+Y2minus1_g <- matrix(nrow = 500, ncol = 10)
+Y2minus2_g <- matrix(nrow = 500, ncol = 9)
+m2_g <- matrix(nrow = 500, ncol = 3)
+g2_g <- matrix(nrow = 500, ncol = 3)
+
+#MCMC
+for (k in 1:100000){
+  epsilon <-  rmvnorm(n=1, mean=c(0,0), sigma=0.01*diag(2), method="chol")
+  xi <- gamma_i + epsilon
+  
+  #calculate Q_n for gamma_i
+  #construct simulation moments
+  U_0 <- rnorm(500, gamma_i[1,1]/(1-gamma_i[1,2]), abs(1/(1- gamma_i[1,2]^2)))
+  U2_g[,1] <- U_0
+  
+  
+  #generate U_1s to U_10s
+  for (i in 1:10){
+    U2_g[,i+1] <- gamma_i[1,1] + gamma_i[1,2]%*%U2_g[,i] + e_s[,i]
+  }
+  
+  #generate Y_0s to Y_10s
+  for (i in 1:11){
+    for (j in 1:500){
+      if(U2_g[j,i] > 0){
+        Y2_g[j,i] = 1
+      }
+      else{
+        Y2_g[j,i] = 0  
+      }
+    }  
+  }
+  
+  #generate Y_ts*Y_t-1s and Y_ts*Y_t-2s
+  for (i in 1:10){
+    for (j in 1:500){
+      Y2minus1_g[j,i] <- Y2_g[j,i+1]*Y2_g[j,i]
+    }
+  }
+  
+  for (i in 1:9){
+    for (j in 1:500){
+      Y2minus2_g[j,i] <- Y2_g[j,i+2]*Y2_g[j,i]
+    }
+  }
+  
+  
+  #construct moments
+  m2_g[,1] <- rowMeans(Y2_g)  
+  m2_g[,2] <- rowMeans(Y2minus1_g)
+  m2_g[,3] <- rowMeans(Y2minus2_g)
+  
+  #calculate g(D_i,\gamma)
+  g2_g <- m2_data - m2_g
+  g2_ng<- colMeans(g2_g)
+  
+  #calculate Q_n
+  var2_gg <- as.matrix(var(g2_g))
+  
+  Q2_g <- (1/2)*t(g2_ng)%*%var2_gg%*%g2_ng
+  
+  #calculate f(gamma)
+  f_gamma <- exp(-50*Q2_g)
+  
+  #calculate Q_n for xi
+  #construct simulation moments
+  U_0 <- rnorm(500, xi[1,1]/(1-xi[1,2]), abs(1/(1- xi[1,2]^2)))
+  U2_g[,1] <- U_0
+  
+  #generate U_1s to U_10s
+  for (i in 1:10){
+    U2_g[,i+1] <- xi[1,1] + xi[1,2]%*%U2_g[,i] + e_s[,i]
+  }
+  
+  #generate Y_0s to Y_10s
+  for (i in 1:11){
+    for (j in 1:500){
+      if(U2_g[j,i] > 0){
+        Y2_g[j,i] = 1
+      }
+      else{
+        Y2_g[j,i] = 0  
+      }
+    }  
+  }
+  
+  #generate Y_ts*Y_t-1s and Y_ts*Y_t-2s
+  for (i in 1:10){
+    for (j in 1:500){
+      Y2minus1_g[j,i] <- Y2_g[j,i+1]*Y2_g[j,i]
+    }
+  }
+  
+  for (i in 1:9){
+    for (j in 1:500){
+      Y2minus2_g[j,i] <- Y2_g[j,i+2]*Y2_g[j,i]
+    }
+  }
+  
+  
+  #construct moments
+  m2_g[,1] <- rowMeans(Y2_g)  
+  m2_g[,2] <- rowMeans(Y2minus1_g)
+  m2_g[,3] <- rowMeans(Y2minus2_g)
+  
+  #calculate g(D_i,\gamma)
+  g2_g <- m2_data - m2_g
+  g2_ng<- colMeans(g2_g)
+  
+  #calculate Q_n
+  var2_gg <- as.matrix(var(g2_g))
+  
+  Q2_g <- (1/2)*t(g2_ng)%*%var2_gg%*%g2_ng
+  
+  #calculate f(gamma)
+  f_xi <- exp(-50*Q2_g)
+  
+  #calculate pi
+  pi_gamma <- dmvnorm(gamma_i, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  pi_xi <- dmvnorm(xi, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  
+  
+  rho <- (f_xi*pi_xi)/(f_gamma*pi_gamma)
+  u <- runif(1,min=0,max=1)
+  
+  if(is.na(rho) > 0){
+    
+  } else if(u <= rho){
+    gamma_i <- xi
+    a2 <- a2 + 1
+  } 
+  else
+  {
+  }
+  gamma2 <- rbind(gamma2,gamma_i)
+}
+
+#remove burn-in
+gamma2 <- tail(gamma2, 99000)
+
+#traceplot
+colnames(gamma2) <- c("gamma_0","gamma_1")
+traplot(gamma2)
+
+#histogram
+hist(gamma2[,1],main = paste("Histogram of gamma_0"), xlab = "gamma_0")
+hist(gamma2[,2],main = paste("Histogram of gamma_1"), xlab = "gamma_1")
+
+#scatterplot
+plot(gamma2[,1],gamma2[,2],main="Scatterplot of gamma_0 and gamma_1", xlab="gamma_0 ", ylab="gamma_1")
+
+#####
+
+#b) 
+#import data
+xl_data <- "C:/Users/BillW/Documents/Spring 2020/ECON2140/Pset 9 Data/Pset 9 Data/FishMarketData.csv"
+data <- as.data.frame(read.csv(file = xl_data))
+
+tau <- 0.5
+gamma_0 <- c(8,2)
+storage <- matrix(ncol = 3, nrow = 0)
+moments <- c()
+a <- 0
+
+#create matrix of instruments
+constant <- rep(1,111)
+IV <- data.frame(constant = constant, mixed = data$mixed, stormy = data$stormy)
+
+#run MCMC
+for (k in 1:100000){
+  epsilon <-  rmvnorm(n=1, mean=c(0,0), sigma=0.04*diag(2), method="chol")
+  xi <- gamma_0 + epsilon
+  
+  #calculate Q_n for gamma_0
+  moments <- (tau - 1*(data[,2] - (gamma_0[1] + gamma_0[2]*data[,1]) < 0))*IV
+  
+  #calculate g(D_i,\gamma)
+  gn<- colMeans(moments)
+  
+  #calculate Q_n
+  var_g <- as.matrix(var(moments))
+  
+  Qn_gamma <- (1/2)*t(gn)%*%var_g%*%gn
+  
+  #calculate f(gamma)
+  f_gamma <- exp(-111*Qn_gamma)
+  
+  #calculate Q_n for xi
+  moments <- (tau - 1*(data[,2] - (xi[1] + xi[2]*data[,1]) < 0))*IV
+  
+  #calculate g(D_i,\gamma)
+  gn <- colMeans(moments)
+  
+  #calculate Q_n
+  var_g <- as.matrix(var(moments))
+  
+  Qn_xi <- (1/2)*t(gn)%*%var_g%*%gn
+  
+  #calculate f(gamma)
+  f_xi <- exp(-111*Qn_xi)
+  
+  #calculate pi
+  pi_gamma <- dmvnorm(gamma_0, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  pi_xi <- dmvnorm(xi, mean = c(0,0), sigma = 10*diag(2), log = FALSE)
+  
+  
+  rho <- (f_xi*pi_xi)/(f_gamma*pi_gamma)
+  u <- runif(1,min=0,max=1)
+  
+  if(is.na(rho) > 0){
+    
+  } else if(u <= rho){
+    gamma_0 <- xi
+    a <- a + 1
+    Qn <- Qn_xi
+  } 
+  else
+  {
+  Qn <- Qn_gamma
+  }
+  
+  store <- c(Qn,gamma_0[1],gamma_0[2])
+  
+  storage <- rbind(storage, store)
+}
+
+#remove burn-in
+storage <- tail(storage, 99000)
+
+#traceplot
+colnames(storage) <- c("Qn","alpha","beta")
+
+traplot(storage[,3], main = "Beta")
+
+#histogram
+hist(storage[,3],main = paste("Histogram of beta"), xlab = "beta")
+
+#c)
+mean(storage[,3])
+sd(storage[,3])
+quantile(storage[,3], probs = c(0.025,0.975), na.rm = TRUE)
+
+#e)
+AR <- 111*2*storage[,1]
+storage <- cbind(storage, AR)
+
+CS <- matrix(ncol = 1, nrow = 99000)
+for (i in 1:99000){
+  if(storage[i,4] <= 0.352){
+    CS[i,1] = 1
+  }
+  else{
+    CS[i,1] = 0
+  }
+}
+
+storage <- cbind(storage,CS)
+
+#take only rows within CS
+AR_CS <-storage[!(storage[,5] == 0),]
+
+#create scatter plot
+plot(AR_CS[,2],AR_CS[,3],main="95% Robust Confidence Set of Alpha & Beta", xlab="alpha", ylab="beta")
+
+#create confidence set
+min(AR_CS[,3])
+max(AR_CS[,3])
