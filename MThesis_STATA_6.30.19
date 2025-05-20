@@ -614,3 +614,246 @@ outreg2 using QualChar5.tex, append dec(3)
 
 reg hv270 treatment if year == 2014
 outreg2 using QualChar5.tex, append dec(3)
+
+
+#Egypt
+
+*hv023(24): Governorates with branches: Cairo (1,2), Giza (27,28), Menoufia (21,22), Kalyubia (15,16), Beni Suef (29,30)
+*use 24
+
+*hv025: urban, rural
+*hv015: 1 = survey completed
+*ha(hc)53_1(55,56): hemoglobin level
+*hc(ha)4_1: height/age
+*hc7_1: weight/age
+*hv121_01: attending school in current year
+*hv107_01: highest year of school completed
+*hv104_01: sex
+*hv105_01: age
+*hv270: wealth index (not available in 2000)
+*sh102: own dwelling
+*hv204-221 economic variables
+*hv009: number of household members
+*hv007: year surveyed
+
+*set maximum variables
+set maxvar 10000
+
+*clean 2000
+
+use "C:\Users\billwang\Downloads\Data Analysis\Egypt\EG_2000_DHS_04252019_1243_129494\EGHR42DT\EGHR42FL.DTA", clear
+
+gen hc53_1 = hc53_01
+gen hc53_2 = hc53_02
+gen hc53_3 = hc53_03
+gen hc53_4 = hc53_04
+gen hc53_5 = hc53_05
+
+gen hc55_1 = hc55_01
+gen hc55_2 = hc55_02
+gen hc55_3 = hc55_03
+gen hc55_4 = hc55_04
+gen hc55_5 = hc55_05
+
+gen hc56_1 = hc56_01
+gen hc56_2 = hc56_02
+gen hc56_3 = hc56_03
+gen hc56_4 = hc56_04
+gen hc56_5 = hc56_05
+
+gen hc4_1 = hc4_01
+gen hc4_2 = hc4_02
+gen hc4_3 = hc4_03
+gen hc4_4 = hc4_04
+gen hc4_5 = hc4_05
+
+gen hc7_1 = hc7_01
+gen hc7_2 = hc7_02
+gen hc7_3 = hc7_03
+gen hc7_4 = hc7_04
+gen hc7_5 = hc7_05
+
+gen sh102 = sh036
+
+save "C:\Users\billwang\Downloads\Data Analysis\Egypt\Egypt2000.dta"
+
+*clean 2005
+use "C:\Users\billwang\Downloads\Data Analysis\Egypt\EG_2005_DHS_04252019_1245_129494\EGHR51DT\EGHR51FL.dta"
+
+gen hc53_1 = hc53_01
+gen hc53_2 = hc53_02
+gen hc53_3 = hc53_03
+gen hc53_4 = hc53_04
+gen hc53_5 = hc53_05
+
+gen hc55_1 = hc55_01
+gen hc55_2 = hc55_02
+gen hc55_3 = hc55_03
+gen hc55_4 = hc55_04
+gen hc55_5 = hc55_05
+
+gen hc56_1 = hc56_01
+gen hc56_2 = hc56_02
+gen hc56_3 = hc56_03
+gen hc56_4 = hc56_04
+gen hc56_5 = hc56_05
+
+gen hc4_1 = hc4_01
+gen hc4_2 = hc4_02
+gen hc4_3 = hc4_03
+gen hc4_4 = hc4_04
+gen hc4_5 = hc4_05
+
+gen hc7_1 = hc7_01
+gen hc7_2 = hc7_02
+gen hc7_3 = hc7_03
+gen hc7_4 = hc7_04
+gen hc7_5 = hc7_05
+
+save "C:\Users\billwang\Downloads\Data Analysis\Egypt\Egypt2005.dta"
+
+
+*open 2014
+use "C:\Users\billwang\Downloads\Data Analysis\Egypt\Egypt2014.dta", clear
+
+*append 2005 and 2000
+append using "C:\Users\billwang\Downloads\Data Analysis\Egypt\Egypt2005.dta"
+append using "C:\Users\billwang\Downloads\Data Analysis\Egypt\Egypt2000.dta"
+
+*generate DID variables
+gen treatment = 0
+replace treatment = 1 if hv024 == 1 | hv024 == 2 | hv024 == 27 | hv024 == 28 | hv024 == 21 | hv024 == 22 | hv024 == 15 | hv024 == 16 | hv024 == 29 | hv024 == 30
+
+gen time = .
+replace time = 0 if hv007 == 2005
+replace time = 1 if hv007 == 2014
+
+gen time2 = .
+replace time2 = 0 if hv007 == 2000
+replace time2 = 1 if hv007 == 2014
+
+gen timep = .
+replace timep = 0 if hv007 == 2000
+replace timep = 1 if hv007 == 2005
+
+gen did = treatment*time
+gen did2 = treatment*time2
+gen didp = treatment*timep
+
+*placebo test
+*economic variables
+reg hv206 treatment timep didp hv009 if hv015 == 1, robust
+reg hv207 treatment timep didp hv009 if hv015 == 1, robust
+reg hv208 treatment timep didp hv009 if hv015 == 1, robust
+reg hv209 treatment timep didp hv009 if hv015 == 1, robust
+reg hv210 treatment timep didp hv009 if hv015 == 1, robust
+reg hv211 treatment timep didp hv009 if hv015 == 1, robust
+reg hv212 treatment timep didp hv009 if hv015 == 1, robust
+*significant for hv212
+
+*health variables
+reg hc53_1 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc53_2 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*no significance
+
+reg hc4_1 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc4_2 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*significant
+
+reg hc7_1 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc7_2 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*significant for HH member 1
+
+*education variables
+reg hv121_01 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hv121_02 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+reg hv121_03 treatment time did hv009 hv104_03 hv105_03 if hv015 == 1, robust
+reg hv121_04 treatment time did hv009 hv104_04 hv105_04 if hv015 == 1, robust
+reg hv121_05 treatment time did hv009 hv104_05 hv105_05 if hv015 == 1, robust
+*no significance
+
+reg hv107_01 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hv107_02 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+reg hv107_03 treatment time did hv009 hv104_03 hv105_03 if hv015 == 1, robust
+reg hv107_04 treatment time did hv009 hv104_04 hv105_04 if hv015 == 1, robust
+reg hv107_05 treatment time did hv009 hv104_05 hv105_05 if hv015 == 1, robust
+*no significance
+
+
+*DID test using 2005 and 2014
+*economic variables
+reg hv206 treatment time did hv009 if hv015 == 1, robust
+reg hv207 treatment time did hv009 if hv015 == 1, robust
+reg hv208 treatment time did hv009 if hv015 == 1, robust
+reg hv209 treatment time did hv009 if hv015 == 1, robust
+reg hv210 treatment time did hv009 if hv015 == 1, robust
+reg hv211 treatment time did hv009 if hv015 == 1, robust
+reg hv212 treatment time did hv009 if hv015 == 1, robust
+*significant for hv210
+
+*health variables
+reg hc53_1 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc53_2 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*no significance
+
+reg hc4_1 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc4_2 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*significant
+
+reg hc7_1 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc7_2 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*significant for HH member 1
+
+*education variables
+reg hv121_01 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hv121_02 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+reg hv121_03 treatment time did hv009 hv104_03 hv105_03 if hv015 == 1, robust
+reg hv121_04 treatment time did hv009 hv104_04 hv105_04 if hv015 == 1, robust
+reg hv121_05 treatment time did hv009 hv104_05 hv105_05 if hv015 == 1, robust
+*no significance
+
+reg hv107_01 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hv107_02 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+reg hv107_03 treatment time did hv009 hv104_03 hv105_03 if hv015 == 1, robust
+reg hv107_04 treatment time did hv009 hv104_04 hv105_04 if hv015 == 1, robust
+reg hv107_05 treatment time did hv009 hv104_05 hv105_05 if hv015 == 1, robust
+*no significance
+
+*DID test using 2000 and 2014
+*economic variables
+reg hv206 treatment time2 did2 hv009 if hv015 == 1, robust
+reg hv207 treatment time2 did2 hv009 if hv015 == 1, robust
+reg hv208 treatment time2 did2 hv009 if hv015 == 1, robust
+reg hv209 treatment time2 did2 hv009 if hv015 == 1, robust
+reg hv210 treatment time2 did2 hv009 if hv015 == 1, robust
+reg hv211 treatment time2 did2 hv009 if hv015 == 1, robust
+reg hv212 treatment time2 did2 hv009 if hv015 == 1, robust
+*significant for hv212
+
+*health variables
+reg hc53_1 treatment time2 did2 hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc53_2 treatment time2 did2 hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*no significance
+
+reg hc4_1 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc4_2 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*significant
+
+reg hc7_1 treatment time did hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hc7_2 treatment time did hv009 hv104_02 hv105_02 if hv015 == 1, robust
+*significant for HH member 1
+
+*education variables
+reg hv121_01 treatment time2 did2 hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hv121_02 treatment time2 did2 hv009 hv104_02 hv105_02 if hv015 == 1, robust
+reg hv121_03 treatment time2 did2 hv009 hv104_03 hv105_03 if hv015 == 1, robust
+reg hv121_04 treatment time2 did2 hv009 hv104_04 hv105_04 if hv015 == 1, robust
+reg hv121_05 treatment time2 did2 hv009 hv104_05 hv105_05 if hv015 == 1, robust
+*significant for HH members 2,3,4
+
+reg hv107_01 treatment time2 did2 hv009 hv104_01 hv105_01 if hv015 == 1, robust
+reg hv107_02 treatment time2 did2 hv009 hv104_02 hv105_02 if hv015 == 1, robust
+reg hv107_03 treatment time2 did2 hv009 hv104_03 hv105_03 if hv015 == 1, robust
+reg hv107_04 treatment time2 did2 hv009 hv104_04 hv105_04 if hv015 == 1, robust
+reg hv107_05 treatment time2 did2 hv009 hv104_05 hv105_05 if hv015 == 1, robust
+*no significance
