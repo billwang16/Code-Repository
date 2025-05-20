@@ -1,0 +1,226 @@
+"2017 visits"
+/*pull claims from outpatient and carrier files, define mhsud*/
+%macro outpatient_part1;
+%let vars1=mhsud mh sud;
+
+%let f=outp car;
+
+ %do i=1 %to 2;
+     %let ff=%scan(&f,&i);
+
+ %do z=2017 %to 2017;
+
+data &ff&z.clm
+%if &i=1 %then %do;
+(keep=bene_id clm_from_dt icd_dgns_cd1 clm_id &vars1 npi prvdr_spclty);
+length prvdr_spclty $3.;
+  set outpat.outpatient_base_claims_k_&z ;
+rename at_physn_npi=npi;
+prvdr_spclty=left(at_physn_spclty_cd);
+%end;
+
+%if &i=2 %then %do;
+(keep=bene_id clm_from_dt icd_dgns_cd1 clm_id &vars1);
+set carrier.bcarrier_claims_k_&z;
+%end;
+
+sysecho "&ff&z CLM";
+
+sdiag=left(icd_dgns_cd1);
+s3diag=substr(sdiag,1,3);
+s4diag=substr(sdiag,1,4);
+s5diag=substr(sdiag,1,5);
+
+if length(sdiag) > 2 then do;
+if s3diag in ("291","292") or ("295" <= s3diag <= "316") & (s3diag ^="310") & (s4diag not in ("3051","3058"))
+         or (("F10" <= s3diag <= "F69") & s3diag ^="F17") or ("F80" <= s3diag <= "F99") then do; mhsud=1; end;
+
+
+if s3diag in ("291","292","303","304") or s4diag in ("3050","3059") or ("3052" <= s4diag <= "3057")
+         or ("F10" <= s3diag <= "F16") or ("F18" <= s3diag <= "F19")  then do; sud=1; end;
+
+if  ("295" <= s3diag <= "316") & s3diag not in ("303","304","310")
+                               & s4diag not in ("3051","3058","3050","3059","3052","3053","3054","3055","3056","3057")
+                              or ("F20" <= s3diag <= "F69") or ("F80" <= s3diag <= "F99") then do; mh=1; end;
+end;
+
+%end;
+%end;
+%mend outpatient_part1;
+%outpatient_part1
+
+
+/*delete non-mh*/
+data bill.outp2017clm;
+set outp2017clm;
+if mh ^= 1 then delete;
+run;
+
+data bill.car2017clm;
+set car2017clm;
+if mh ^= 1 then delete;
+run;
+
+
+/*sort by bene_id and clm_id (to be merged with revenue/line files later)*/
+proc sort data = bill.outp2017clm;
+by bene_id clm_id;
+run;
+
+proc sort data = bill.car2017clm;
+by bene_id clm_id;
+run;
+
+
+/*retrieve place of service, hpcs, modifiers, specialty codes from revenue outpatient file and line carrier file*/
+%macro outpatient_part2;
+%let f=outp car;
+
+ %do i=1 %to 2;
+     %let ff=%scan(&f,&i);
+
+ %do z=2017 %to 2017;
+ 
+%let rev=rev_cntr;
+%let vars2=outpat er_ therapy1 res interm ;
+
+data &ff&z.rev
+%if &i=1 %then %do; (keep=bene_id hcpcs_cd hcpcs_1st_mdfr_cd clm_id &vars2 &rev npi RNDRNG_PHYSN_SPCLTY_CD HCPCS_2ND_MDFR_CD HCPCS_3RD_MDFR_CD HCPCS_4TH_MDFR_CD);
+ set outpat.outpatient_revenue_center_k_&z;
+ rename RNDRNG_PHYSN_NPI = npi;
+%end;
+
+
+%if &i=2 %then %do; (keep=bene_id hcpcs_cd hcpcs_1st_mdfr_cd clm_id &vars2 npi prvdr_spclty LINE_PLACE_OF_SRVC_CD HCPCS_2ND_MDFR_CD);
+  set carrier.bcarrier_line_k_&z;
+  rename prf_physn_npi=npi;
+
+%end;
+
+sysecho "&ff&z REV";
+
+  array zero (*) &vars2;
+     do ar1 =1 to dim(zero);
+           zero(ar1)=0;
+  end;
+
+if hcpcs_cd in ('H0001','H0002','H0004','H0005','H0006','H0014','H0015','H0016','H0020','H0022','H0023','H0028','H0030','H0031',
+            'H0033','H0034','H0036','H0037','H0038','H0039','H0040','H0046','H0049','H0050','H1011'
+            'H2000','H2001','H2010','H2013','H2014','H2015','H2016','H2017','H2018',',H2019',
+            'H2020','H2021','H2023','H2024','H2025','H2026','H2027','H2028','H2020',',H2030',
+            'H2031','H2032','H2033','H2037','H5010','H5020','H5025','H5030','H5220',',H5230','H5240','H5299',
+            'M0064','Q3014','S0280','S0281','S3005','S9110','S9127','S9454','S9482'
+            'T0006','T0011','T0012','T0015','T0016','T1017','T1018',
+                        'T1023','T1024','T1025','T1026','T1027','T1040','T1041','T2010',
+                        'T2011','T2012','T2013','T2014','T2015','T2018','T2019','T2020',
+                        'T2021','T2022','T2023','T2036','T2037','Z0001','Z0002',
+                        'G0071','G0072','G0073','G0074','G0075','G0076',
+                        'G0077','G0078','G0079','G0080','G0081','G0082','G0175','G0351',
+                        'G0396','G0397','G0436','G0437','G0442','G0443','G0463','G0466',
+                        'G0467','G0469','G0470','G0502','G0503','G0504','G0505','G0506',
+                        'G0507','G0511','G0512','G0513','G0514','G0515',
+                        '0359T','0360T','0361T','0362T','0363T','0364T','0365T','0366T',
+                        '0367T','0368T','0369T','0370T','0371T','0372T','0373T','0374T',
+                        '90791','90792','90801','90802','90804','90805','90806','90807',
+                        '90808','90809','90810','90811','90812','90813','90814','90815','90820','90831'
+                        '90832','90833','90834','90835','90836','90837','90838',
+                        '90839','90840','90842','90843','90844',
+                        '90845','90846','90847','90848','90849','90853','90855','90857',
+                        '90862','90865','90875','90876','90880','90900','90901','90902',
+                        '90904','90906','90908','90910','97003','97004','99058','99201',
+                        '99202','99203','99204','99205','99211','99212','99213','99214',
+                        '99215','99241','99242','99243','99244','99245','99371','99372',
+                        '99373','99404','99408','99409','99412','99420','99487','99489','99490')
+  %if &i=1 %then %do; or rev_cntr in ('0905','0906','0911') then outpat=1; %end;
+           %else %do; then outpat=1; %end;
+%end;
+%end;
+%mend outpatient_part2;
+%outpatient_part2
+
+
+  
+/*remove outpat ^= 1 and save*/
+data bill.outp2017rev;
+set outp2017rev;
+if outpat ^= 1 then delete;
+run;
+
+data bill.car2017rev;
+set car2017rev;
+if outpat ^= 1 then delete;
+run;
+
+
+/*sort by bene_id and clm_id*/
+proc sort data = bill.outp2017rev; 
+by bene_id clm_id;
+run;
+
+
+proc sort data = bill.car2017rev; 
+by bene_id clm_id;
+run;
+
+
+
+/*merge claims and rev/line files*/
+data bill.outp2017;
+  merge bill.outp2017rev (in=b) bill.outp2017clm (in=a); 
+  by bene_id clm_id;
+  if a & b;
+run;
+
+
+data bill.car2017;
+  merge bill.car2017rev (in=b) bill.car2017clm (in=a); 
+  by bene_id clm_id;
+  if a & b;
+run;
+
+
+
+/*dedup*/
+proc sort nodupkey data = bill.outp2017 out = bill.outp2017_dedup; 
+by bene_id clm_id;
+run;
+
+proc sort nodupkey data = bill.car2017 out = bill.car2017_dedup; 
+by bene_id clm_id;
+run;
+
+
+/*merge outpatient and carrier*/
+data bill.outpat2017;
+ set bill.outp2017_dedup bill.car2017_dedup (in=a);
+Carrier=a;
+run;
+
+proc sort data = bill.outpat2017;
+by BENE_ID clm_from_dt hcpcs_cd carrier;
+run;
+
+
+*removes duplicate cases between carrier/outpatient - dedups by BENE_ID, clm_from_dt;
+data bill.outpat2017_v2 (drop=check icd: newdate);
+retain newdate  car hcpcs ;
+  set bill.outpat2017; by bene_id ;
+  if first.bene_id then do;
+     newdate=clm_from_dt;
+         check=.;
+         car=carrier;
+         hcpcs=hcpcs_cd;
+  end;
+ if ((carrier ^= car) & (newdate=clm_from_dt) & (hcpcs=hcpcs_cd)) then check=1;
+ car=carrier;
+ newdate=clm_from_dt;
+ hcpcs=hcpcs_cd;
+if check=.;
+proc sort; by bene_id clm_from_dt;
+run;
+
+
+data bill.outpat_v2_2017;
+  set bill.outpat2017_v2; by bene_id clm_from_dt;
+  if first.clm_from_dt;
+run;
