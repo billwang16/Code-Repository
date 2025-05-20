@@ -1,0 +1,333 @@
+rm(list = ls())
+library(data.table)
+library(ggplot2)
+library(MASS)
+library(glmnet)
+
+#Part 1
+
+#Assumptions
+set.seed(123)
+N <- 1000
+k_mc <- 500
+p <- 10
+r <- 0.2
+mu <- 0
+sigma <- 1
+
+mu_v <- rep(0,p)
+mu_v[1:10] <- 0
+
+#true betas
+b <- rep(0, p)
+b[1:2] <- 5:6
+
+#define covariance matrix of X
+m <- diag(10)
+m[outer(1:10, 1:10, function(i,j) i!=j)] <- r
+
+
+# create vector to store beta estimates
+bss_result <- list()
+beta <- c()
+
+
+# 1) generate samples 
+  for (i in 1:k_mc){
+    # DGP: y = b1x1 + b2x2 + u
+    # x is standard normal
+    # u uncorrelated with x, also standard normal
+    
+    u <- rnorm(N, mu, sigma)
+    
+    x <- mvrnorm(N, mu_v, m, empirical = TRUE)
+    y <- x%*%b[1:10] + u
+    
+    #store data
+    dt <- data.table(cbind(x, y))
+
+    
+    # 2) program subset selection with s = 2 
+    
+    #create vector to select combinations
+    keep = c("V1", "V2", "V3", "V4", "V5","V6","V7","V8","V9","V10")
+
+    #create combinations
+    cb <- combn(keep, 2, simplify = FALSE)
+
+    
+    #converting indexes of cb into regression formula
+    fml_lst <- sapply(cb, function(x) as.formula(paste0("V11~",paste(x,collapse="+"))))
+    
+    #apply regression to each combination
+    model <- lapply(fml_lst, function(x) lm(x, data = dt))
+    
+    #selecting best regressors based on R^2
+    rss <- sapply(model, deviance)
+    bss_result <- model[[which.min(rss)]]
+
+    #extract coefficients
+    bss <- as.matrix(bss_result$coef[2:3])
+
+    
+    #index coefficients
+    beta_1 <- c(0,0,0,0,0,0,0,0,0,0)
+    beta_1 <- replace(beta_1, na.exclude(match(colnames(dt), rownames(bss))), bss_result$coef[2:3])
+
+    #store estimates
+    beta <- rbind(beta, beta_1)
+
+  }
+
+#report estimates
+print(beta)
+#all simulations generate betas close to true betas
+
+# 3) report standard deviation and mean of estimators. report probability that irrelevant estimators are included/relevant estimators are missed.
+
+#check mean
+colMeans(beta)
+#mean almost identical to true values
+
+#check standard deviation
+apply(beta, 2, sd)
+#sd(b1) = 0.0339, sd(b2) = 0.0325. sd of other b's = 0
+
+
+#probability that irrelevant estimators are included
+colnames(beta) <- c("V1","V2","V3","V4","V5","V6","V7","V8","V9","V10")
+nrow(subset(as.data.frame(beta), V1 == 0 | V2 == 0))
+#every simulation generates correct estimators
+
+
+# 4) & 5) program Lasso regression using cyclic coordinate descent using a grid of lambdas
+
+#generate lambdas
+lambda <- rnorm(100, 2*sigma*sqrt(2*log(10)/N), 5)
+n_lambda <- 100
+lambda_vec <- seq(0,1, length = n_lambda)
+
+#matrices to store results
+beta_cd <- matrix(0, n_lambda, p)
+beta_all <- c()
+xx <- N-1
+
+#set number of iterations for cyclic coordinate descent
+N_iter <- 100
+
+#change k_mc to 100 for faster computation
+k_mc <- 100
+
+for (i in 1:k_mc){
+  #generate data
+  u <- rnorm(N, mu, sigma)
+  
+  x <- mvrnorm(N, mu_v, m, empirical = TRUE)
+  #standardize x
+  X <- scale(x, center = TRUE, scale = TRUE)
+  
+  y <- X%*%b[1:10] + u
+  #demean y
+  Y <- y - mean(y)
+  
+  #store data
+  dt <- data.table(cbind(X, Y))
+  
+for (l in 1:n_lambda){
+  #make initial guess that all betas are 0
+  b_lasso <- rep(0, p)
+  #residualize
+  res <- Y - X%*%b_lasso
+  
+  #cyclic coordinate descent
+  for (s in 1:N_iter){
+    for (j in 1:p){
+      #add back the beta that's being regressed
+      res <- res + X[,j]*b_lasso[j]
+      
+      #update beta
+      b_ols <- sum(X[, j] * res)/xx
+      #calculate beta after shrinkage
+      shkg <- abs(b_ols) - lambda_vec[l]
+      #calculate updated lasso estimate
+      b_lasso[j] <- sign(b_ols)*ifelse(shkg > 0, shkg, 0)
+      
+      #update residual
+      res <- res - X[,j] * b_lasso[j]
+    }
+  }
+  #update estimates for specific lambda
+  beta_cd[l, ] <- b_lasso
+  
+}
+  #store all estimates
+  beta_all <- rbind(beta_all, beta_cd)
+}
+
+#report estimates
+print(beta_all)
+#beta_all shows estimates for 100 lambdas in 100 simulations (first 100 rows are for the first simulation, etc...)
+
+
+# 6) pick lambda that selects 2 regressors and compare to subset selection
+
+#create variable to store betas
+beta_s2 <- c()
+
+for (i in 1:k_mc){
+  
+  #generate data
+  u <- rnorm(N, mu, sigma)
+  
+  x <- mvrnorm(N, mu_v, m, empirical = TRUE)
+  y <- x%*%b[1:10] + u
+  
+  dt <- data.table(cbind(x, y))
+  
+  #apply lasso
+  lasso <- cv.glmnet(x,y,family = "gaussian")
+
+  
+  #extract coefficients
+  lasso_coef <- coef(lasso, s = "lambda.1se")
+  
+  #append estimates
+  beta_s2 <- rbind(beta_s2, lasso_coef)
+
+}
+
+#compare estimates to ones from subset selection
+print(beta_s2)
+print(beta)
+#slightly lower estimates than subset selection, which is expected because of shrinkage
+
+
+#Part 2
+
+#1) simulate 500 samples
+
+#new variables
+p2 <- 100
+
+#mean
+mu_v2 <- rep(0,p2)
+mu_v2[1:100] <- 0
+
+#true betas
+b2 <- rep(0, p2)
+b2[1:5] <- 1:5
+
+#covariance matrix
+m2 <- diag(100)
+m2[outer(1:100, 1:100, function(i,j) i!=j)] <- r
+
+#matrix to store estimates
+beta2 <- c()
+
+k_mc <- 500
+
+  for (i in 1:k_mc){
+    
+    #generate data
+    u2 <- rlogis(N, location = 0, scale = 1)
+    x2 <- mvrnorm(N, mu_v2, m2, empirical = TRUE)
+    
+    LP <- x2%*%b2[1:100] + u2
+    y2 <- rbinom(length(LP), 1, plogis(LP))
+
+    
+    dt2 <- data.table(cbind(x2, y2))
+    
+    #2) estimate logit model
+    
+    model2 <- glm(y2~x2,data=dt2,family=binomial())
+    
+    #append estimates
+    beta2 <- rbind(beta2, model2$coefficients)
+    
+  }
+
+#report estimates
+print(beta2)
+
+#3) write down logit objective function with Lasso penalty
+
+# min(b2) sum(N)[(y2 - x2%*%b2)^2] + sum(p)[(lambda*abs(b2))]
+# where y2 = rbinom(length(LP), 1, plogis(LP)) as defined above
+
+#4) is the function convex? Justify answer.
+
+# p is sufficiently small compared to N, and X'X is positive-semidefinite given that X are not perfectly correlated/
+#thus lasso is convex
+
+
+#5) estimate logit-lasso using a grid of lambdas
+
+#reduce samples to 100 again
+k_mc <- 100
+
+#vector to store estimates
+beta3 <- c()
+
+  for (i in 1:k_mc){
+    
+    #generate data
+    u2 <- rlogis(N, location = 0, scale = 1)
+    x2 <- mvrnorm(N, mu_v2, m2, empirical = TRUE)
+    
+    LP <- x2%*%b2[1:100] + u2
+    y2 <- rbinom(length(LP), 1, plogis(LP))
+    
+    dt2 <- data.table(cbind(x2, y2))
+    
+    #apply logit-lasso
+    
+    model3 <- glmnet(x2,y2,family="binomial")
+
+
+    #retrieve coefficients
+    lasso_coef3 <- as.matrix(coef.glmnet(model3))
+
+    #append estimates using column bind, since the number of lambdas used for each sample is different
+    beta3 <- cbind(beta3, lasso_coef3)
+
+  }
+
+#report estimates
+print(beta3)
+#each row represents a different covariate, each column represents a different lambda.
+#s0 represents the first lambda for each sample
+
+#6) select lambda using cross-validation
+
+#create space to store estimates
+beta4 <- c()
+
+for (i in 1:k_mc){
+  
+  #generate data
+  u2 <- rlogis(N, location = 0, scale = 1)
+  x2 <- mvrnorm(N, mu_v2, m2, empirical = TRUE)
+  
+  LP <- x2%*%b2[1:100] + u2
+  y2 <- rbinom(length(LP), 1, plogis(LP))
+  
+  dt2 <- data.table(cbind(x2, y2))
+  
+  #apply lasso with cross-validation
+  
+  model4 <- cv.glmnet(x2,y2,family="binomial")
+  
+  #extract estimates
+  lasso_coef4 <- coef(model4, s = "lambda.min")
+  
+  #append estimates
+  beta4 <- rbind(beta4, lasso_coef4)
+  
+}
+
+#report estimates
+print(beta4)
+#first 101 rows represent estimates for first simulation, etc...
+#estimates do not tend to true betas
+#estimates are not sparse, and true betas have significant shrinkage
