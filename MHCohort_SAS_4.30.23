@@ -1,0 +1,484 @@
+***PROGRAM TO BUILD MH/SUD COHORTS***;
+***********************************************************************************;
+***PART 0: WE NOW NEED URBAN/RURAL IN FOR FOR ALL BENES IN ORDER TO CREATE DENOM***;
+***********************************************************************************;
+
+%macro denom;
+
+data cbsa (keep = fips cbsa rename = (fips=fips1 cbsa=cbsa1));
+ length fips ssa $ 5;
+ set tele.cbsaxwalk (rename = (fips=fips2 ssa = ssa2));
+ if fips2 < 10000 then fips = compress("0"||fips2);
+ else fips = fips2;
+
+ if ssa2 < 10000 then ssa = compress("0"||ssa2);
+ else ssa = ssa2;
+ if cbsa = . then cbsa = 99;
+ if cbsa ~= 99 then metro = 1;
+ else metro = 0;
+ run;
+proc sort;
+ by fips1;
+run;
+
+
+data zc;
+ set tele.zip_county (drop=tot_ratio);
+ run;
+proc sort;
+ by bene_zip;
+
+data z1 (drop = count rename =(fips=fips1))
+z2 (drop = count rename =(fips=fips2))
+z3 (drop = count rename =(fips=fips3))
+z4 (drop = count rename =(fips=fips4))
+z5 (drop = count rename =(fips=fips5))
+z6 (drop = count rename =(fips=fips6));
+ set zc;
+ by bene_zip;
+ if first.bene_zip = 1 then count = 1;
+ else count + 1;
+ if count = 1 then output z1;
+ if count = 2 then output z2;
+ if count = 3 then output z3;
+ if count = 4 then output z4;
+ if count = 5 then output z5;
+ if count = 6 then output z6;
+ run;
+
+proc sort data=z1; by bene_zip;
+proc sort data=z2; by bene_zip;
+proc sort data=z3; by bene_zip;
+proc sort data=z4; by bene_zip;
+proc sort data=z5; by bene_zip;
+proc sort data=z6; by bene_zip;
+
+data ben_st;
+ merge z1 z2 z3 z4 z5 z6;
+ by bene_zip;
+ run;
+
+data ben_st;
+ set ben_st;
+ run;
+proc sort data=ben_st; by fips1;
+
+data ben_st ;
+ merge ben_st (in=b) cbsa;
+ by fips1;
+ if b;
+ run;
+
+proc sort; by fips2;
+data cbsa; set cbsa (rename = (cbsa1=cbsa2 fips1=fips2)); run;
+proc sort;
+ by fips2;
+
+data ben_st ;
+ merge ben_st (in=b) cbsa;
+ by fips2;
+ if b;
+ run;
+proc sort; by fips3;
+data cbsa; set cbsa (rename = (cbsa2=cbsa3 fips2=fips3));run;
+proc sort;
+ by fips3;
+
+data ben_st ;
+ merge ben_st (in=b) cbsa;
+ by fips3;
+ if b;
+ run;
+proc sort; by fips4;
+data cbsa; set cbsa (rename = (cbsa3=cbsa4 fips3=fips4)); run;
+proc sort;
+ by fips4;
+
+data ben_st ;
+ merge ben_st (in=b) cbsa;
+ by fips4;
+ if b;
+ run;
+proc sort; by fips5;
+data cbsa; set cbsa (rename = (cbsa4=cbsa5 fips4=fips5)); run;
+proc sort;
+ by fips5;
+
+data zip_cbsa ;
+ merge ben_st (in=b) cbsa;
+ by fips5;
+ if b;
+run;
+
+proc sort;
+ by bene_zip;
+
+***RUCA FILE;
+data ruca (rename = (zipa=bene_zip));
+ set tele.ruca_2006;
+ keep zipa RUCA2_0;
+ *format ruca2_0 ruc.;
+ run;
+proc sort;
+ by bene_zip;
+
+
+data ruca_cbsa;
+ merge zip_cbsa ruca;
+  by bene_zip;
+run;
+
+
+
+***********************************************************************;
+***PART 1: DENOMINATOR: URBAN BENES IN 20% SAMPLE & 100% RURAL BENES***;
+***********************************************************************;
+
+ %do yr=2010 %to 2017;
+
+
+data den (drop=mdcr_entlmt_buyin_ind_01 hmo_ind_01 mdcr_entlmt_buyin_ind_02 hmo_ind_02
+mdcr_entlmt_buyin_ind_03 hmo_ind_03 mdcr_entlmt_buyin_ind_04 hmo_ind_04
+mdcr_entlmt_buyin_ind_05 hmo_ind_05 mdcr_entlmt_buyin_ind_06 hmo_ind_06
+mdcr_entlmt_buyin_ind_07 hmo_ind_07 mdcr_entlmt_buyin_ind_08 hmo_ind_08
+mdcr_entlmt_buyin_ind_09 hmo_ind_09 mdcr_entlmt_buyin_ind_10 hmo_ind_10
+mdcr_entlmt_buyin_ind_11 hmo_ind_11 mdcr_entlmt_buyin_ind_12 hmo_ind_12
+ptd_cntrct_id_01 ptd_cntrct_id_02 ptd_cntrct_id_03 ptd_cntrct_id_04
+ptd_cntrct_id_05 ptd_cntrct_id_06 ptd_cntrct_id_07 ptd_cntrct_id_08
+ptd_cntrct_id_09 ptd_cntrct_id_10 ptd_cntrct_id_11 ptd_cntrct_id_12);
+set mbsf.mbsf_abcd_summary_&yr (keep=bene_id mdcr_entlmt_buyin_ind_01 hmo_ind_01 mdcr_entlmt_buyin_ind_02 hmo_ind_02
+mdcr_entlmt_buyin_ind_03 hmo_ind_03 mdcr_entlmt_buyin_ind_04 hmo_ind_04
+mdcr_entlmt_buyin_ind_05 hmo_ind_05 mdcr_entlmt_buyin_ind_06 hmo_ind_06
+mdcr_entlmt_buyin_ind_07 hmo_ind_07 mdcr_entlmt_buyin_ind_08 hmo_ind_08
+mdcr_entlmt_buyin_ind_09 hmo_ind_09 mdcr_entlmt_buyin_ind_10 hmo_ind_10
+mdcr_entlmt_buyin_ind_11 hmo_ind_11 mdcr_entlmt_buyin_ind_12 hmo_ind_12 bene_hmo_cvrage_tot_mons
+sample_group age_at_end_ref_yr state_code county_cd zip_cd rti_race_cd sex_ident_cd esrd_ind
+entlmt_rsn_orig dual_elgbl_mons bene_birth_dt bene_death_dt
+ptd_cntrct_id_01 ptd_cntrct_id_02 ptd_cntrct_id_03 ptd_cntrct_id_04
+ptd_cntrct_id_05 ptd_cntrct_id_06 ptd_cntrct_id_07 ptd_cntrct_id_08
+ptd_cntrct_id_09 ptd_cntrct_id_10 ptd_cntrct_id_11 ptd_cntrct_id_12) ;
+
+sysecho "MBSF &yr";
+
+rename zip_cd=bene_zip;
+ssa = compress(state_code||county_cd);
+
+
+months = 0;
+if hmo_ind_01 = "0" and mdcr_entlmt_buyin_ind_01 in ("3", "C") then months = months + 1;
+if hmo_ind_02 = "0" and mdcr_entlmt_buyin_ind_02 in ("3", "C") then months = months + 1;
+if hmo_ind_03 = "0" and mdcr_entlmt_buyin_ind_03 in ("3", "C") then months = months + 1;
+if hmo_ind_04 = "0" and mdcr_entlmt_buyin_ind_04 in ("3", "C") then months = months + 1;
+if hmo_ind_05 = "0" and mdcr_entlmt_buyin_ind_05 in ("3", "C") then months = months + 1;
+if hmo_ind_06 = "0" and mdcr_entlmt_buyin_ind_06 in ("3", "C") then months = months + 1;
+if hmo_ind_07 = "0" and mdcr_entlmt_buyin_ind_07 in ("3", "C") then months = months + 1;
+if hmo_ind_08 = "0" and mdcr_entlmt_buyin_ind_08 in ("3", "C") then months = months + 1;
+if hmo_ind_09 = "0" and mdcr_entlmt_buyin_ind_09 in ("3", "C") then months = months + 1;
+if hmo_ind_10 = "0" and mdcr_entlmt_buyin_ind_10 in ("3", "C") then months = months + 1;
+if hmo_ind_11 = "0" and mdcr_entlmt_buyin_ind_11 in ("3", "C") then months = months + 1;
+if hmo_ind_12 = "0" and mdcr_entlmt_buyin_ind_12 in ("3", "C") then months = months + 1;
+
+months_pd = 0;
+if substr(ptd_cntrct_id_01,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_02,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_03,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_04,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_05,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_06,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_07,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_08,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_09,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_10,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_11,1,1) = "S" then months_pd = months_pd + 1;
+if substr(ptd_cntrct_id_12,1,1) = "S" then months_pd = months_pd + 1;
+
+Cohort1=(months = 12 );
+Cohort2=(months = 12 & months_pd = 12);
+
+
+if cohort1=1 ;
+
+proc sort;
+ by bene_zip;
+run;
+
+
+***MERGE IN INFO TO DETERMINE URBAN/RURAL***;
+
+
+data den;
+ merge den (in=t) ruca_cbsa;
+ by bene_zip;
+ if t;
+ proc sort;
+  by ssa;
+
+data cbsa (keep = ssa cbsa);
+ length fips ssa $ 5;
+ set tele.cbsaxwalk (rename = (fips=fips2 ssa = ssa2));
+ if fips2 < 10000 then fips = compress("0"||fips2);
+ else fips = fips2;
+
+ if ssa2 < 10000 then ssa = compress("0"||ssa2);
+ else ssa = ssa2;
+ if cbsa = . then cbsa = 99;
+run;
+
+proc sort;
+ by ssa;
+
+data tele.den_&yr;
+ merge den (in=t) cbsa;
+ by ssa;
+ if t;
+
+ if cbsa ~in (99, .) or cbsa1 ~in (99, .) or
+ cbsa2 ~in (99, .) or cbsa3 ~in (99, .) or
+ cbsa4 ~in (99, .) or cbsa5 ~in (99, .) then rural = 0;
+ else rural = 1;
+
+if ruca2_0 > 3 then rural = 1;
+
+if rural = 1 or (sample_group ~= "" and rural = 0);
+
+
+proc sort;
+ by bene_id ;
+run;
+
+proc freq data=tele.den_&yr;
+tables sample_group;
+title "den &yr";
+run;
+
+proc datasets lib=work nolist;
+delete den;
+quit;
+run;
+
+
+%end;
+%mend denom;
+
+******************************************************************************;
+***PART 2: READ IN CLAIMS FILES, ASSIGN DUMMY VARIABLES BASED ON DIAG CODES***;
+******************************************************************************;
+
+
+%macro inp;
+
+%do y=2010 %to 2017;
+
+data t0 (keep=bene_id icd_dgns_cd1 mhsud mh sud schizo bip  clm_drg_cd mh_drg sud_drg);
+ set inpat.inpatient_base_claims_k_&y;
+
+mh=0;
+mhsud=0;
+sud=0;
+schizo=0;
+bip=0;
+mdd_=0;
+
+array diag{2} $ icd_dgns_cd1 - icd_dgns_cd2;
+do i=1 to dim(diag);
+    sdiag=left(diag{i});
+    s3diag=substr(sdiag,1,3);
+    s4diag=substr(sdiag,1,4);
+    s5diag=substr(sdiag,1,5);
+
+if length(sdiag) > 2 then do;
+
+if i=1 then do;
+if s3diag in ("291","292") or ("295" <= s3diag <= "316") & (s3diag ^="310")  & (s4diag not in ("3051","3058"))
+         or (("F10" <= s3diag <= "F69") & s3diag ^="F17") or ("F80" <= s3diag <= "F99") then do; mhsud=1; end;
+
+if s3diag in ("291","292","303","304") or s4diag in ("3050","3059") or ("3052" <= s4diag <= "3057")
+         or ("F10" <= s3diag <= "F16") or ("F18" <= s3diag <= "F19") then do; sud=1; end;
+
+if s3diag in ("295","297") or ("F20" <= s3diag <= "F29") then do; schizo=1; end;
+
+if s4diag in ("2960","2961","2967","2969") or (s4diag="2968" & s5diag ^="29682")
+          or ("2964" <= s4diag <= "2966") or s5diag in ("30111","30113")
+          or s3diag in ("F30","F31") or s4diag ="F340" then do; bip=1; end;
+
+if  ("295" <= s3diag <= "316") & s3diag not in ("303","304","310")
+                               & s4diag not in ("3051","3058","3050","3059","3052","3053","3054","3055","3056","3057")
+                              or ("F20" <= s3diag <= "F69") or ("F80" <= s3diag <= "F99") then do; mh=1; end;
+    end;
+  end;
+ end;
+
+mh_drg = clm_drg_cd  in ("880", "881", "882", "883", "885", "886", "887");
+sud_drg = clm_drg_cd  in ("894", "895", "896", "897");
+
+if mhsud=1 or mh_drg=1 or sud_drg=1;
+
+proc sort ; by bene_id;
+run;
+
+%let r=mhsud sud schizo bip mh ;
+%let w=mhsudi sudi schizophreniai bipolari drg_mhi drg_sudi mhi ;
+%global &r &w;
+
+data inpatient&y (keep=bene_id &w);
+ set t0; by bene_id;
+  if first.bene_id then do;
+     mhi=0;
+     mhsudi=0;
+     sudi=0;
+     schizophreniai=0;
+     bipolari=0;
+         drg_mhi=0;
+         drg_sudi=0;
+  end;
+if mhsud=1 or drg_mhi=1 or drg_sudi=1 then mhsudi + 1;
+if mh=1 or mh_drg=1 then mhi + 1;
+if sud=1 or sud_drg=1 then sudi + 1;
+if schizo=1 then schizophreniai + 1;
+if bip=1 then bipolari + 1;
+if mh_drg=1 then drg_mhi + 1;
+if sud_drg=1 then drg_sudi + 1;
+
+if last.bene_id then output;
+run;
+
+
+proc freq data=t0;
+tables sud ;
+title "&y - Inpatient Claims Level";
+run;
+
+
+ proc datasets lib=work nolist;
+ delete t0;
+ run;
+quit;
+
+ %end;
+
+%mend inp;
+%inp
+
+%macro outpat;
+
+      %do y=2010 %to 2017;
+
+data outpat (keep=bene_id icd_dgns_cd: clm_from_dt mh mhsud sud schizo bip);
+ set carrier.bcarrier_claims_k_&y outpat.outpatient_base_claims_k_&y;
+
+mh=0;
+mhsud=0;
+sud=0;
+schizo=0;
+bip=0;
+
+array diag{25} $ icd_dgns_cd1 - icd_dgns_cd25;
+do i=1 to dim(diag);
+    sdiag=left(diag{i});
+    s3diag=substr(sdiag,1,3);
+    s4diag=substr(sdiag,1,4);
+    s5diag=substr(sdiag,1,5);
+
+if length(sdiag) > 2 then do;
+
+if s3diag in ("291","292") or ("295" <= s3diag <= "316") & (s3diag ^="310") & (s4diag not in ("3051","3058"))
+         or (("F10" <= s3diag <= "F69") & s3diag ^="F17") or ("F80" <= s3diag <= "F99") then do; mhsud=1; end;
+
+if s3diag in ("295","297") or ("F20" <= s3diag <= "F29") then do; schizo=1; end;
+
+if s4diag in ("2960","2961","2967","2969") or (s4diag="2968" & s5diag ^="29682")
+          or ("2964" <= s4diag <= "2966") or s5diag in ("30111","30113")
+          or s3diag in ("F30","F31") or s4diag ="F340" then do; bip=1; end;
+
+if s3diag in ("291","292","303","304") or s4diag in ("3050","3059") or ("3052" <= s4diag <= "3057")
+         or ("F10" <= s3diag <= "F16") or ("F18" <= s3diag <= "F19")  then do; sud=1; end;
+
+if  ("295" <= s3diag <= "316") & s3diag not in ("303","304","310")
+                               & s4diag not in ("3051","3058","3050","3059","3052","3053","3054","3055","3056","3057")
+                              or ("F20" <= s3diag <= "F69") or ("F80" <= s3diag <= "F99") then do; mh=1; end;
+
+  end;
+end;
+
+if mhsud=1 ;
+
+proc sort; by bene_id clm_from_dt;
+run;
+
+data outpatient&y (keep=bene_id mhsudo mho schizophreniao sudo bipolaro);
+retain rdate;
+  set outpat; by bene_id;
+    if first.bene_id then do;
+           rdate=.;
+           mho=0;
+           mhsudo=0;
+           sudo=0;
+           schizophreniao=0;
+           bipolaro=0;
+        end;
+if mhsud=1 & (rdate ne clm_from_dt) then mhsudo + 1;
+if mh=1 & (rdate ne clm_from_dt) then mho + 1;
+if schizo=1 & (rdate ne clm_from_dt) then schizophreniao + 1;
+if sud=1 & (rdate ne clm_from_dt) then sudo + 1;
+if bip=1 & (rdate ne clm_from_dt) then bipolaro + 1;
+rdate=clm_from_dt;
+if last.bene_id then output;
+run;
+
+proc freq data=outpat;
+tables sud;
+title "&y - Carrier/Outpatient Claims Level";
+run;
+
+ proc datasets lib=work nolist;
+ delete outpat;
+ run;
+quit;
+
+ %end;
+%mend outpat;
+%outpat
+
+
+%macro cohort;
+%do i=2010 %to 2017;
+data tele.cohort_&i._1;
+  merge tele.den_&i (in=a) inpatient&i outpatient&i; by bene_id;
+  if a;
+
+inp_mhsud=(mhsudi >= 1 or drg_mhi >=1 or drg_sudi >=1);
+inp_mh=(mhi >= 1  or drg_mhi >=1);
+inp_sud=(sudi >=1 or drg_sudi >=1);
+
+oup_mhsud=(mhsudo >= 2);
+oup_mh=(mho >=2) or (mhsudo=2 & mho=1 & sudo=1) ;
+oup_sud=(sudo >=1) or (mhsudo=2 & sudo=1 & mho=1) ;
+
+MHSUD=inp_mhsud=1 or oup_mhsud=1;
+MH=inp_mh=1 or oup_mh=1;
+SUD=inp_sud=1 or oup_sud=1;
+
+schizophrenia = (schizophreniai >= 1  or schizophreniao >= 2 );
+bipolar_=(bipolari >=1 or bipolaro >=2) ;
+
+if schizophrenia = 1 then bipolar = 0; else bipolar=bipolar_;
+
+smi=(schizophrenia=1 or bipolar=1);
+
+dual=(dual_elgbl_mons > 0);
+
+ if mh=1 & sud=0 then Cohort=1;
+ if mh=0 & sud=1 then Cohort=2;
+ if mh=1 & sud=1 then Cohort=3;
+
+proc freq;
+tables cohort1 cohort2 mhsud mh sud smi schizophrenia bipolar  bipolar_
+       cohort * mhsud * mh * sud / list missing;
+title "20&i";
+run;
+
+%end;
+
+
+%mend cohort;
+%cohort
