@@ -1,0 +1,810 @@
+
+log close _all
+clear
+set more off
+
+** Set globals
+global stem 	"Z:\Bill\Telemedicine and OUD"
+global data 	"$stem\Claims"
+global clean 	"$stem\Clean data"
+global log 		"$stem\Log files"
+
+
+log using "$log/1_clean_claims_data_`c(current_date)'.log", append
+
+************************************************************************************
+
+
+
+********************************************************
+** Confirmatory Diagnoses
+********************************************************
+
+	foreach d in FACILITY PHYSICIAN{
+	
+		clear
+		import delimited using "$data\ConfirmatoryDiagnoses\\`d'_INITIAL_EXTRACT", delimiter("|") varnames(1)
+		
+		// Generate flags for each diagnosis
+		g op_od=0
+		g hep_c=0
+		g inject_infect=0
+		g detox_rehab=0
+		
+		// Loop through all diagnosis codes to flag presence of diagnosis
+		foreach v of varlist *diag* {
+			
+			di "********** Diagnosis code: `v'"
+			
+			replace op_od=1 if op_od==0 & `v'!="" & ///
+				(	inlist(`v',"T400X1","T400X2","T400X4","T400X5") | /// 
+					inlist(`v',"T401X1","T401X2","T401X4") | ///
+					inlist(`v',"T402X1","T402X2","T402X4","T402X5") | ///
+					inlist(`v',"T403X1","T403X2","T403X4","T403X5") | ///
+					inlist(`v',"T404X1","T404X2","T404X4","T404X5"))
+					
+			replace hep_c=1 if hep_c==0 & `v'!="" & (`v'=="B171" | `v'=="B182" | `v'=="Z2252")
+			
+			replace inject_infect=1 if inject_infect==0 & `v'!="" & ///
+				(	inrange(substr(`v',1,4),"I801", "I809") |  inrange(substr(`v',1,4),"L020", "L024") |  inrange(substr(`v',1,4),"L030", "L039") | ///
+					inlist(`v',"G061","G062","L0291","L983", "B376","I330","I339","I38","I39")	)
+					
+			if("`d'"=="FACILITY"){
+			replace detox_rehab=1 if detox_rehab==0 & `v'!="" & ///
+				inlist(revcode,"0116","0126","0136","0146","0156","0118","0128","0138","0158") & ///
+				(substr(proc1,1,2) =="HZ" | substr(proc2,1,2) =="HZ" | substr(proc3,1,2) =="HZ" | substr(proc4,1,2) =="HZ"| substr(proc5,1,2) =="HZ" | substr(proc6,1,2) =="HZ" ) & ///
+				substr(`v',1,3) =="F11"
+				}
+			
+			}
+			
+		// Collapse fom claim-level to patient-day-level
+		collapse (max) op_od-detox_rehab, by(optum_lab_id svc_date)
+		g date = date(svc_date, "MDY")
+		format date %td
+		drop svc_date
+		
+		tempfile cd_`d'
+		save `cd_`d''
+		
+		}
+	
+	clear
+	use `cd_FACILITY'
+	append using `cd_PHYSICIAN'
+	collapse (max) op_od-detox_rehab, by(optum_lab_id date)
+	sort optum_lab_id date
+	save "$clean/confirmatory_diagnoses_2018to2020", replace
+	
+
+
+		
+********************************************************
+** MOUD prescriptions from pharmacy	and medical claims
+********************************************************
+
+**** From pharmacy claims
+
+	// Store commercial pharmacy claims
+	
+		clear
+		import delimited using "$data\MOUD\PHARMACY_INITIAL_EXTRACT", delimiter("|") varnames(1)	
+		describe
+		tab brand_name generic_name
+		g long oldw_provider_id = oldw_prescribing_provider_id
+		drop oldw_prescribing_provider_id
+		g source="PHARM_COM"
+		tempfile moud_pharm
+		save `moud_pharm'
+
+	// Store Part D pharmacy claims
+	
+		clear
+		import delimited using "$data\MOUD\PHARMACY_D_INITIAL_EXTRACT", delimiter("|") varnames(1)
+		describe
+		tab brand_name generic_name
+		tostring compound_ind, replace
+		g source="PHARM_D"
+		tempfile moud_pharm_d
+		save `moud_pharm_d'
+
+	// Combine commercial and Part D claims
+	
+		clear
+		use `moud_pharm'
+		append using `moud_pharm_d'
+		tab source
+		drop if oldw_provider_id==. | oldw_provider_id == 0			// These are claims with a missing provider ID, or where ID unassigned
+		tab source
+		
+		g date = date(svc_date, "MDY")
+		format date %td
+		
+		save "$clean\moud_pharmacy_claims_2018to2020", replace
+
+		
+		
+**** From medical claims
+
+	// Store facility claims
+	
+		clear
+		import delimited using "$data\MOUD\FACILITY_INITIAL_EXTRACT", delimiter("|") varnames(1)	
+		describe
+		
+		** Collapse data from service-level to claim-level
+		collapse (firstnm) fromdate (lastnm) thrudate, by(optum_lab_id oldw_provider_id oldw_claim_nbr specialty_category_code specialty_category_code_desc)		
+		duplicates report optum_lab_id oldw_claim_nbr
+		
+		g source="FACILITY"
+		tempfile moud_fac
+		save `moud_fac'
+		
+	// Store physician claims
+	
+		clear
+		import delimited using "$data\MOUD\PHYSICIAN_INITIAL_EXTRACT", delimiter("|") varnames(1)	
+		describe
+		
+		** Collapse data from service-level to claim-level
+		collapse (firstnm) fromdate (lastnm) thrudate, by(optum_lab_id oldw_provider_id oldw_claim_nbr specialty_category_code specialty_category_code_desc)		
+		duplicates report optum_lab_id oldw_claim_nbr
+		
+		g source="PHYSICIAN"
+		tempfile moud_phys
+		save `moud_phys'
+			
+	// Combine facility and physician claims
+	
+		clear
+		use `moud_fac'
+		append using `moud_phys'
+		tab source
+		drop if oldw_provider_id==. | oldw_provider_id == 0
+		tab source
+		
+		g date = date(thrudate, "MDY")
+		format date %td
+		
+		save "$clean\moud_medical_claims_2018to2020", replace
+		
+		
+		
+		
+********************************************************
+** OUD visits and MOUD scripts from medical claims
+********************************************************	
+
+**** Store facility claims
+
+	clear
+	import delimited using "$data\OUD\FACILITY_INITIAL_EXTRACT", delimiter("|") varnames(1)
+	
+	// Flag if diagnosis for opioid dependence OR opioid use
+		g opioid_dependence=0
+		g opioid_use=0
+		
+		foreach v of varlist *diag* {
+			di "********** Diagnosis code: `v'"
+			replace opioid_dependence=1 if opioid_dependence==0 & `v'!="" & substr(`v',1,4) =="F112" & (inlist(ama_site,21,51,55,56,61) | inlist(ama_site,22,24,25,62,65))
+			replace opioid_use=1 if opioid_use==0 & `v'!="" & (substr(`v',1,4) =="F111" | substr(`v',1,4) =="F119")
+			}
+		tab1 opioid_dependence opioid_use
+		keep if opioid_dependence == 1 | opioid_use == 1
+	
+	// Flag if any visit included MAT - this will be subset of OUD visits that include MOUD
+		* (1) Buprenorphine - single ingredient
+		g moud_buprenorphine = cptcode=="J0571"
+		* (2) Vivitrol in claims WITHOUT AUD diagnosis
+		g moud_vivitrol = (cptcode=="J2315" | inlist(proc1,"HZ84ZZZ","HZ94ZZZ") | inlist(proc2,"HZ84ZZZ","HZ94ZZZ") | ///
+			inlist(proc3,"HZ84ZZZ","HZ94ZZZ") | inlist(proc4,"HZ84ZZZ","HZ94ZZZ") | inlist(proc5,"HZ84ZZZ","HZ94ZZZ") | ///
+			inlist(proc6,"HZ84ZZZ","HZ94ZZZ") ) & ///
+			(substr(admis_diag_cd,1,3)!="F10" & substr(diag1,1,3)!="F10" & substr(diag2,1,3)!="F10" & substr(diag3,1,3)!="F10" & ///
+			substr(diag4,1,3)!="F10" & substr(diag5,1,3)!="F10" & substr(diag6,1,3)!="F10" & substr(diag7,1,3)!="F10" & ///
+			substr(diag8,1,3)!="F10" & substr(diag9,1,3)!="F10") 
+		tab1 moud_*
+	
+	// Collapse data from service-level to claim-level
+		collapse  (firstnm) fromdate (lastnm) thrudate (max) opioid_* moud_*, by(optum_lab_id oldw_provider_id oldw_claim_nbr specialty_category_code specialty_category_code_desc)		
+		duplicates report optum_lab_id oldw_claim_nbr
+	
+	// For opioid use claims, flag if confirmatory diagnosis occurred within 90 days of the claim
+		expand 90 if opioid_use == 1
+		g date = date(thrudate, "MDY") if opioid_use == 1
+		bys optum_lab_id oldw_provider_id oldw_claim_nbr: replace date = date+_n-1 if opioid_use == 1
+		format date %td 
+		merge m:1 optum_lab_id date using "$clean/confirmatory_diagnoses_2018to2020", keep(1 3) nogen
+		collapse (max) opioid_* moud_* ///
+			opioid_overdose_90days = op_od hep_c_90days = hep_c inject_infect_90days = inject_infect detox_rehab_90days = detox_rehab, ///
+			by(optum_lab_id oldw_provider_id oldw_claim_nbr fromdate thrudate)		
+	
+	// Flag and keep opioid use disorder visits
+		g oud_visit = 1 if opioid_dependence == 1 | (opioid_use == 1 & (opioid_overdose_90days ==1 | hep_c_90days==1 |  inject_infect_90days==1 |  detox_rehab_90days == 1))
+		tab oud_visit, missing
+		keep if oud_visit == 1
+		
+	// Save data
+		g source = "FACILITY"
+		tempfile oud_fac
+		save `oud_fac'
+	
+	
+**** Store physician claims
+
+	clear
+	import delimited using "$data\OUD\PHYSICIAN_INITIAL_EXTRACT", delimiter("|") varnames(1)
+	
+	// Flag if diagnosis for opioid dependence OR opioid use
+		g opioid_dependence=0
+		g opioid_use=0
+		foreach v of varlist *diag* {
+			di "********** Diagnosis code: `v'"
+			replace opioid_dependence=1 if opioid_dependence==0 & `v'!="" & substr(`v',1,4) =="F112" & (inlist(ama_site,21,51,55,56,61) | inlist(ama_site,22,24,25,62,65))
+			replace opioid_use=1 if opioid_use==0 & `v'!="" & (substr(`v',1,4) =="F111" | substr(`v',1,4) =="F119")
+					** Add flag for if first or second diagnosis position
+			}
+		tab1 opioid_dependence opioid_use
+		keep if opioid_dependence == 1 | opioid_use == 1
+	
+	// Flag if any visit included MAT - this will be subset of OUD visits that include MOUD
+		*(1) Buprenorphine - single ingredient
+		g moud_buprenorphine = cptcode=="J0571"
+		*(2) Vivitrol in claims WITHOU AUD diagnosis
+		g moud_vivitrol = cptcode=="J2315" & substr(diag1,1,3) !="F10" & substr(diag2,1,3) !="F10" & substr(diag3,1,3) !="F10" & substr(diag4,1,3) !="F10" & substr(diag5,1,3) !="F10"
+		tab1 moud_*
+		
+	// Collapse data from claim line level to claim level
+		collapse (firstnm) fromdate (lastnm) thrudate (max) opioid_* moud_*, by(optum_lab_id oldw_provider_id oldw_claim_nbr specialty_category_code specialty_category_code_desc)		
+		duplicates report optum_lab_id oldw_claim_nbr
+		
+	// For opioid use claims, flag if confirmatory diagnosis occurred within 90 days of the claim
+		expand 90 if opioid_use == 1
+		g date = date(thrudate, "MDY") if opioid_use == 1
+		bys optum_lab_id oldw_provider_id oldw_claim_nbr: replace date = date+_n-1 if opioid_use == 1
+		format date %td 
+		merge m:1 optum_lab_id date using "$clean/confirmatory_diagnoses_2018to2020", keep(1 3) nogen
+		collapse (max) opioid_* moud_*  ///
+			opioid_overdose_90days = op_od hep_c_90days = hep_c ///
+			inject_infect_90days = inject_infect detox_rehab_90days = detox_rehab, ///
+			by(optum_lab_id oldw_provider_id oldw_claim_nbr fromdate thrudate)		
+	
+	// Flag and keep opioid use disorder visits
+		g oud_visit = 1 if opioid_dependence == 1 | (opioid_use == 1 & (opioid_overdose_90days ==1 | hep_c_90days==1 |  inject_infect_90days==1 |  detox_rehab_90days == 1))
+		tab oud_visit, missing
+		keep if oud_visit == 1
+	
+	// Save data
+		g source = "PHYSICIAN"
+		tempfile oud_phys
+		save `oud_phys'
+
+	
+**** Combine facility and physician claims
+
+	clear
+	use `oud_fac'
+	append using `oud_phys'
+	tab source
+	drop if oldw_provider_id==. | oldw_provider_id == 0
+	tab source
+	
+	g date = date(thrudate, "MDY")
+	format date %td
+	
+	// Save OUD claims
+		save "$clean\oud_claims_2018to2020", replace
+	
+	// Save subset of claims that involve MOUD
+		keep if moud_buprenorphine == 1 | moud_vivitrol == 1
+		save "$clean\moud_from_oud_claims_2018to2020", replace
+	
+	
+	
+	
+log close _all	
+
+
+log close _all
+clear
+set more off
+
+** Set globals
+global stem "Z:\Bill\Telemedicine and OUD"
+global data "$stem\Claims"
+global clean "$stem\Clean data"
+global log "$stem\Log files"
+global results "$stem\Results"
+
+
+log using "$log\2_id_moud_prescribers_`c(current_date)'.log", append
+
+************************************************************************************
+
+
+
+****************************************************
+** Pull MOUD provider cohort
+****************************************************
+
+clear
+use "$clean\moud_pharmacy_claims_2018to2020"
+append using "$clean\moud_medical_claims_2018to2020"
+append using "$clean\moud_from_oud_claims_2018to2020"
+
+// Store provider specialty listed on each claim in one variable
+	g specialty = specialty_category_code_desc				// This stores specialties listed in commercial pharmacy and medical claims
+	replace specialty = specialty_name if specialty == "" 	// This stores specialty listed on Part D pharmacy claims
+	replace specialty = strtrim(specialty)
+	tab specialty
+	replace specialty = "UNKNOWN" if specialty == ""
+	tab specialty source
+
+	
+// Collapse data from claim-level to provider/specialty-level
+	g total_moud_claims=1
+	collapse (sum) total_moud_claims, by(oldw_provider_id specialty)
+	duplicates tag oldw_provider_id, g(dup)
+	tab dup
+
+	
+// Providers can have more than one specialty listed in their claims, so this will
+// reshape data from the provider/specialty-level to the provider-level, with each of their possible specialties
+// listed in the columns
+	gsort oldw_provider_id -total_moud_claims
+	by oldw_provider_id: g row=_n
+	reshape wide specialty total_moud_claims, i(oldw_provider_id) j(row)
+
+	
+// Once we figure out which specialties to include in the analysis, will include code here to keep only the providers in those specialties
+	
+	
+// Save list of MOUD prescribers	
+	save "$clean\moud_prescribers_2018to2020", replace	
+
+	
+// Export list of primary specialties for each provider
+	contract specialty1
+	label variable specialty1 "Specialty"
+	export excel using "$results\MOUD_providers_Specialty_List_`c(current_date)'", replace firstrow(varl)
+
+
+
+	
+****************************************************
+** Flag each provider's telemdicine use
+****************************************************
+
+// First, generate  crosswalk of modifier codes to Optum modifier keys using the file xwalk_modifier_codes
+// Then store crosswalk as Stata dataset
+	clear
+	import delimited using "$data\xwalk_modifier_codes", delimiter("|") varnames(1)
+	list if code == "GT" | code == "GQ" | code=="95"
+	save "$data\xwalk_modifier_codes", replace
+
+	
+// Export list of MOUD prescribers for whom you will pull office visits.
+// This list will be merged onto the raw Optum claims data to pull office visits JUST for the MOUD prescribers.
+	clear
+	use "$clean\moud_prescribers_2018to2020"
+	keep oldw_provider_id
+	export delimited "$data\Office visits\moud_prescribers_2018to2020.csv", replace delimiter("|")
+	
+	
+************ NOTE: before running code below, will need to pull 2020 office visits for the MOUD prescribers ************
+	
+
+// Pull office visits of MOUD prescribers	
+	clear
+	import delimited using "$data\Office visits\FACILITY_INITIAL_EXTRACT_moud_prescribers_2018to2020", delimiter("|") varnames(1)		
+	g source = "FAC"
+	tempfile fac_claims
+	save `fac_claims'
+
+	clear
+	import delimited using "$data\Office visits\PHYSICIAN_INITIAL_EXTRACT_moud_prescribers_2018to2020", delimiter("|") varnames(1)
+	g source = "PHYS"
+	tempfile phys_claims
+	save `phys_claims'
+
+	clear
+	use `fac_claims'
+	append using `phys_claims'
+
+	g date = date(svc_date, "MDY")
+	format date %td
+	g month = month(date)	
+	g year = year(date)
+	
+
+// Once we figure out which specialties to include in the analysis, will include code here to keep office visits
+// only in the provider's specialty so we can calculate the percent of telemedicine visits within specialty
+	
+	
+// Identify which office visits were telemedicine visits
+	// Note: In the Optum data, modifier codes are reported as follows:
+		* - In the physician claims, these are the variables procedure_modifier_[#]_code, which uses the standard CPT modifier codes.
+		* - In the facility claims, these are the variables procedure_modifer_[#]_key, which uses a different identifier
+			// from the standard CPT modifier codes, so you will need to use the file "xwalk_modifier_codes" to crosswalk
+			// the CPT modifiers to the values in procedure_modifer_[#]_key. The code below will store this as modifier_code_[#].
+			
+	forval p=1/5{
+		g long procedure_modifier_key = procedure_modifier_`p'_key
+		merge m:1 procedure_modifier_key using "$data\xwalk_modifier_codes", keepusing(code) keep(1 3) nogen
+		rename code modifier_code_`p'
+		drop procedure_modifier_key
+	}
+	
+	g telemedicine_visit = ///
+	(cptcode=="99441" | cptcode=="99442" | cptcode=="994423") | ///
+	(modifier_code_1 == "GT" | modifier_code_1 == "GQ" | modifier_code_1 == "95") | ///
+	(modifier_code_2 == "GT" | modifier_code_2 == "GQ" | modifier_code_2 == "95") | ///
+	(modifier_code_3 == "GT" | modifier_code_3 == "GQ" | modifier_code_3 == "95") | ///
+	(modifier_code_4 == "GT" | modifier_code_4 == "GQ" | modifier_code_4 == "95") | ///
+	(modifier_code_5 == "GT" | modifier_code_5 == "GQ" | modifier_code_5 == "95") | ///
+	(procedure_modifier_1_code == "GT" | procedure_modifier_1_code == "GQ" | procedure_modifier_1_code == "95") | ///
+	(procedure_modifier_2_code == "GT" | procedure_modifier_2_code == "GQ" | procedure_modifier_2_code == "95") | ///
+	(procedure_modifier_3_code == "GT" | procedure_modifier_3_code == "GQ" | procedure_modifier_3_code == "95") | ///
+	(procedure_modifier_4_code == "GT" | procedure_modifier_4_code == "GQ" | procedure_modifier_4_code == "95") | ///
+	(procedure_modifier_5_code == "GT" | procedure_modifier_5_code == "GQ" | procedure_modifier_5_code == "95") 
+	
+	
+// For each provider, calculate total visits and fraction of telemedicine visits in each time period of interest
+	g total_office_visits=1
+	collapse (sum) total_office_visits total_tm_visits=telemedicine_visit, by(oldw_provider_id year)
+	g frac_tm=total_tm_visits/total_office_visits
+	reshape wide frac_tm total_tm_visits total_office_visits, i(oldw_provider_id) j(year)
+	
+	su frac_tm2020, de
+	g tm2020_group = 1 if frac_tm2020!= . & frac_tm2020 == 0
+	replace tm2020_group = 2 if frac_tm2020!= . & frac_tm2020 > 0 & frac_tm2020<r(p75)
+	replace tm2020_group = 3 if frac_tm2020!= . & frac_tm2020 > 0 & frac_tm2020>=r(p75)
+	label define tm_group 1 "No telemedicine" 2 "Mid-range telemedicine" 3 "High telemedicine"
+	label values tm2020_group tm_group
+	tab tm2020_group
+	bys tm2020_group: su frac_tm2020
+	
+	save "$clean\moud_prescribers_2018to2020_2020tm_flags", replace
+
+	
+	
+log close _all
+
+
+log close _all
+clear
+set more off
+
+** Set globals
+global stem "Z:\Bill\Telemedicine and OUD"
+global data "$stem\Claims"
+global clean "$stem\Clean data"
+global log "$stem\Log files"
+
+** Set seeds for randomization in patient attribution algorithm
+local seed1 1234567
+local seed2 9876543
+
+log using "$log\3_id_patient_cohort_`c(current_date)'.log", replace
+
+************************************************************************************
+
+
+********************************************************
+** Pull list of MOUD/OUD patients of MOUD prescribers
+********************************************************
+
+// Identify all patient/provider pairs of MOUD prescriptions
+	clear
+	use "$clean\moud_pharmacy_claims_2018to2020"
+	append using "$clean\moud_medical_claims_2018to2020"
+	append using "$clean\moud_from_oud_claims_2018to2020"
+	g year = yofd(date)
+	keep if year >= 2019
+	drop if oldw_provider_id == 0 | oldw_provider_id == .
+	
+	g total_moud_scripts=1
+	collapse (sum) total_moud_scripts,  by(optum_lab_id oldw_provider_id)
+	tempfile moud
+	save `moud'
+	
+
+// Identify all patient/provider pairs of OUD diagnoses
+	clear
+	use "$clean\oud_claims_2018to2020"
+	g year = yofd(date)
+	keep if year >= 2019
+	drop if oldw_provider_id == 0 | oldw_provider_id == .
+	
+	collapse (sum) total_oud_visits = oud_visit, by(optum_lab_id oldw_provider_id)
+	tempfile oud	
+	save `oud'
+
+	
+// Merge patient and provider pairs of MOUD/OUD diagnoses
+	clear
+	use `moud'
+	merge 1:1 optum_lab_id oldw_provider_id using `oud'
+	drop _merge
+
+	foreach v of varlist total_moud_scripts total_oud_visits{
+		replace `v'=0 if `v'==.
+	}
+	save "$clean\patient_provider_pairs_moud_oud_2019to2020", replace
+	
+	
+// Look at patients with any MOUD scripts or OUD diagnoses with a provider in MOUD prescriber cohort
+	clear
+	use "$clean\patient_provider_pairs_moud_oud_2019to2020"
+	merge m:1 oldw_provider_id using "$clean\moud_prescribers_2018to2020", keep(3) keepusing(oldw_provider_id) nogen
+		egen n_prov=group(oldw_provider_id)
+		su n_prov
+		drop n_prov
+		egen n_pat=group(optum_lab_id)
+		su n_pat
+		drop n_pat	
+
+		
+		
+		
+********************************************************
+** Attribute patients to prescribers
+********************************************************
+
+// Create unique patient list
+	contract optum_lab_id
+	drop _freq
+	merge 1:m optum_lab_id using "$clean\patient_provider_pairs_moud_oud_2019to2020", keep(3) nogen
+	keep if _merge==3
+	drop _merge
+		egen n_pat=group(optum_lab_id)
+		su n_pat
+		drop n_pat
+		** Start with 51,591 unique patients
+
+		
+// Step 1: Assign patient to prescriber that wrote majority of their MOUD scripts
+
+	** Keep patient/prescriber pairings where prescriber wrote plurality of all MOUD scripts for patient
+	gsort +optum_lab_id -total_moud_scripts +oldw_provider_id
+	by optum_lab_id: egen max_scripts=max(total_moud_scripts)
+	keep if total_moud_scripts == max_scripts
+	
+	** Assign to prescriber if only 1 prescriber wrote plurality of scripts
+	by optum_lab_id: g total_prescr_max_scripts = _N
+	g long assigned_prescriber = oldw_provider_id if max_scripts>0 & total_prescr_max_scripts==1 
+
+	** Randomly assign prescriber if >1 prescriber wrote plurality of scripts
+	set seed `seed1'
+	g randnum=uniform() if max_scripts>0 & total_prescr_max_scripts>1
+	by optum_lab_id: egen max_rand=max(randnum) if max_scripts>0 & total_prescr_max_scripts>1
+	replace assigned_prescriber = oldw_provider_id if max_scripts>0 & total_prescr_max_scripts>1 & randnum==max_rand
+	g assigned_moud_prescriber= (assigned_prescriber!=.)
+	
+	
+// Step 2: Among patients left unassigned from previous step, assign to provider with whom they had majority of OUD visits
+
+	** Keep patient/prescriber pairings where prescriber with most OUD diagnoses
+	gsort +optum_lab_id -total_oud_visits  +oldw_provider_id
+	by optum_lab_id: egen max_oud=max(total_oud_visits) if max_scripts==0 & assigned_prescriber==.
+	drop if max_scripts==0 & assigned_prescriber==. & total_oud_visits != max_oud
+	
+	** Assign to prescriber if only 1 prescriber wrote plurality of scripts
+	by optum_lab_id: g total_prescr_max_oud = _N if max_scripts==0 & assigned_prescriber==.
+	replace assigned_prescriber = oldw_provider_id if max_scripts==0 & assigned_prescriber==. & total_prescr_max_oud==1 
+
+	** Randomly assign prescriber if >1 prescriber wrote plurality of scripts
+	set seed `seed2'
+	g randnum2=uniform() if max_scripts==0 & total_prescr_max_oud>1
+	by optum_lab_id: egen max_rand2=max(randnum2) if max_scripts==0 & total_prescr_max_oud>1
+	replace assigned_prescriber = oldw_provider_id if max_scripts==0 & total_prescr_max_oud>1 & randnum2==max_rand2
+	
+
+// Generate patient-level list of assigned prescribers
+	collapse (firstnm) assigned_prescriber (max) assigned_moud_prescriber, by(optum_lab_id)
+	assert assigned_prescriber!=.
+	g long oldw_provider_id = assigned_prescriber
+	merge m:1 oldw_provider_id using "$clean\moud_prescribers_2018to2020", keep(3) keepusing(oldw_provider_id specialty1) nogen
+		
+		egen n_=group(oldw_provider_id)
+		su n_
+		drop n_
+		
+		tab assigned_moud_prescriber
+	
+	** Final sample: 47,044 patients are attributed to an MOUD provider 
+	** 39,359 to their main MOUD provider (i.e. assigned in Step 1)
+	** 7,685 to their main OUD provider (i.e. assigned in Step 2)
+	
+
+// Save list of patients assigned to an MOUD provider	
+	save "$clean\patient_cohort_assigned_moud_prov", replace		
+	
+	
+
+log close _all
+
+
+log close _all
+clear
+set more off
+
+** Set globals
+global stem "Z:\Bill\Telemedicine and OUD"
+global data "$stem\Claims"
+global clean "$stem\Clean data"
+global log "$stem\Log files"
+
+log using "$log\4_pull_new_tx_episodes_`c(current_date)'.log", replace
+
+************************************************************************************
+
+
+***********************************************************
+** Pull temporary files
+***********************************************************
+
+// Temporarily store member coverage data
+	clear
+	import delimited using "$data\patients_with_coverage_ind", delimiter("|") varnames(1)
+	tempfile coverage
+	save `coverage'
+	
+// Store diagnoses/visits to identify clean period
+	clear
+	use "$clean\confirmatory_diagnoses_2018to2020"
+	keep if detox_rehab == 1
+	append using "$clean\oud_claims_2018to2020"
+	g oud = 1 if detox_rehab == .
+	append using  "$clean\moud_pharmacy_claims_2018to2020"
+	append using  "$clean\moud_medical_claims_2018to2020"
+	append using "$clean\moud_from_oud_claims_2018to2020"
+	g moud = 1 if detox_rehab == . & oud == .
+	
+	collapse (max) detox_rehab oud moud, by(optum_lab_id date)
+	tempfile clean_period_diagnoses
+	save `clean_period_diagnoses'
+	
+	
+	
+	
+***********************************************************
+** Pull first treatment episodes in year
+***********************************************************
+
+// Pull first OUD claim in 2019 and 2020
+	clear
+	use "$clean\patient_cohort_assigned_moud_prov", replace		
+	count
+	
+	merge 1:m optum_lab_id oldw_provider_id using "$clean/oud_claims_2018to2020", keep(3) keepusing (oldw_claim_nbr date) nogen
+	g year = yofd(date)
+	keep if year!=. & year >= 2019 & (month(date)>=4 & month(date)<=9)
+	bysort optum_lab_id oldw_provider_id year (date oldw_claim_nbr): keep if _n==1
+	count
+	rename date date_first_oud
+	tab year
+	drop oldw_claim_nbr
+	tempfile first_oud
+	save `first_oud'
+
+	
+// Pull first MOUD claim in 2019 and 2020
+	clear
+	use "$clean\moud_pharmacy_claims_2018to2020"
+	append using "$clean\moud_medical_claims_2018to2020"
+	append using "$clean\moud_from_oud_claims_2018to2020"
+	tempfile all_moud
+	save `all_moud'
+
+	clear
+	use "$clean\patient_cohort_assigned_moud_prov", replace		
+	count
+	
+	merge 1:m optum_lab_id oldw_provider_id using `all_moud', keep(3) keepusing (oldw_claim_nbr date) nogen
+	g year = yofd(date)
+	keep if year!=. & year >= 2019 & (month(date)>=4 & month(date)<=9)
+	bysort optum_lab_id oldw_provider_id year (date oldw_claim_nbr): keep if _n==1
+	count
+	rename date date_first_moud
+	tab year
+	drop oldw_claim_nbr
+	tempfile first_moud
+	save `first_moud'
+	
+	
+// Merge date of first OUD and MOUD for each patient-provider pair
+	clear
+	use `first_oud'
+	merge 1:1 optum_lab_id assigned_prescriber assigned_moud_prescriber oldw_provider_id year using `first_moud', nogen
+	order optum_lab_id assigned_prescriber assigned_moud_prescriber oldw_provider_id year
+	egen date_first_episode = rowmin(date_first_oud date_first_moud)
+		format date_first_episode %td
+		assert date_first_episode !=.
+	g first_episode_from_oud = date_first_oud == date_first_episode
+	
+	
+// Check total number of episodes with assigned prescriber	
+	egen n_ = group(optum_lab_id)
+	su n_
+	drop n_	
+		** 35,877 patients with 45,696 episodes with assigned prescriber
+		
+		
+		
+		
+***********************************************************
+** Identify which tx episodes have a 60-day clean period
+***********************************************************
+	
+// Merge on enrollment information
+	merge m:1 optum_lab_id using `coverage', keep(1 3) nogen
+	g cov_first_date = date(eff_date, "MDY")
+	g cov_last_date = date(end_date, "MDY")
+	format cov_* %td
+	
+	
+// Flag patients with 60 days of enrollment before episode
+	g enroll_60_days_before = cov_first_date<= date_first_episode - 60
+	//tab enroll_60_days_before
+
+	
+// Among patients with 60 days of enrollment before episode, ID if 60 days was a clean period
+	expand 61 if enroll_60_days_before == 1
+	g date = date_first_episode if enroll_60_days_before == 1
+	format date %td
+	bys optum_lab_id date_first_episode: replace date = date - 61 + _n
+	replace date = . if date == date_first_episode
+	
+	merge m:1 optum_lab_id date using `clean_period_diagnoses', keep(1 3) nogen
+	collapse (max) oud_prev60days = oud moud_prev60days = moud detox_rehab_prev60days = detox_rehab, ///
+		by(optum_lab_id assigned_prescriber assigned_moud_prescriber oldw_provider_id year ///
+		date_first_oud date_first_moud date_first_episode first_episode_from_oud eff_date end_date ///
+		state_county_fips d_ruca_code gender year_of_birth business_line_code medical_coverage_ind ///
+		pharmacy_coverage_ind mh_coverage_ind cov_first_date cov_last_date enroll_60_days_before)	
+	count
+	foreach v of varlist *_prev60days{
+		replace `v' = 0 if `v' == .
+	}
+	g clean_60_days_before = (oud_prev60days == 0 & moud_prev60days == 0 & detox_rehab_prev60days == 0) if enroll_60_days_before == 1
+	//tab enroll_60_days_before clean_60_days_before, missing
+			
+			
+// Calculate months of enrollment after initial episode
+	g cov_first_month = mofd(cov_first_date)
+	g cov_last_month = mofd(cov_last_date)
+	g month_episode = mofd(date_first_episode)
+	format cov_first_month cov_last_month %tm 
+	
+	g months_enroll_before_ep = cov_first_month - month_episode
+	su months_enroll_before_ep, de
+	tab months_enroll_before_ep
+	
+	g months_enroll_after_ep = cov_last_month - month_episode
+	su months_enroll_after_ep, de
+	tab months_enroll_after_ep
+
+	
+// Flag in-sample episodes
+	g episode_in_sample = months_enroll_after_ep >=3 & months_enroll_after_ep!=. & ///
+		medical_coverage_ind == "Y" & pharmacy_coverage_ind  == "Y" & mh_coverage_ind == "Y"
+	tab clean_60_days_before episode_in_sample, missing
+		** Among 45,696 episodes, can will 28,360 in-sample because patient had at least 3 months of enrollment after episode
+		**  10,026 are "new" episodes (due to clean period or no enrollment before episode)
+		**  18,334 are episodes from established patients
+		
+/* 
+// Flag if episode with low vs high TM user	
+	merge m:1 oldw_provider_id using "$clean\moud_prescribers_2018to2020_2020tm_flags", keep(1 3) nogen
+	tab episode_in_sample tm2020_group, missing
+*/
+
+// Save dataset of new treatment episodes
+	save "$clean\new_tx_episodes_2019to2020", replace
+
+	
+
+log close _all
+
+
+	
+
