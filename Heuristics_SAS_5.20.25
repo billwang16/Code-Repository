@@ -1,6 +1,6 @@
 /*data locations*/
 libname bw 'G:\Bill\Heuristics'; 
-libname jyk 'G:\JooYeon\data'; 
+libname jyk 'G:\data'; 
 libname ready3 ODBC DSN=PA_MA_READY_B  schema=live; /*V3.0 cleaned*/
 
 /*import supplmentary data*/
