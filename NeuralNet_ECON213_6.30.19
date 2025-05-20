@@ -1,0 +1,372 @@
+rm(list = ls())
+library(data.table)
+library(ggplot2)
+library(MASS)
+library(neuralnet)
+library(rpart)
+
+#Part 1
+
+#1. simulate samples
+
+#define variables
+S <- 100
+N <- 1000
+a1 <- 1
+a2 <- 1
+gamma1 <- c(1,0,1)
+gamma2 <- c(1,1,0)
+
+#define mean and covariance matrix of X
+#I assume that the constant also follows standard normal distribution
+#I also assume that covariates are orthogonal to each other
+mu <- rep(0,3)
+sigma <- diag(3)
+
+#create vectors to store estimates
+a1_hat <- c()
+a2_hat <- c()
+gamma1_hat <- c()
+gamma2_hat <- c()
+
+#generate samples
+for (i in 1:S){
+  u <- rnorm(N, 0, 1)
+  x <- mvrnorm(N, mu, sigma, empirical = TRUE)
+  y <- a1*(exp(x%*%gamma1)/(1+exp(x%*%gamma1))) + a2*(exp(x%*%gamma2)/(1+exp(x%*%gamma2))) + u
+  
+
+  #store data
+  dt <- data.table(cbind(x, y))
+  
+#2. estimate parameters using Newton-Raphson method
+  
+#create random starting points for each parameter
+#I let the starting points centre around the true value
+  a1_r <- rnorm(1, a1, 1)
+  a2_r <- rnorm(1, a2, 1)
+  gamma1_r <-  mvrnorm(1, gamma1, sigma, empirical = FALSE)
+  gamma2_r <- mvrnorm(1, gamma2, sigma, empirical = FALSE)
+  
+#I will run 100 iterations of Newton-Raphson for each sample
+  for (i in 1:100){
+    #define SSE function
+    q <- t((y - a1_r*(exp(x%*%gamma1_r)/(1+exp(x%*%gamma1_r))) - a2_r*(exp(x%*%gamma2_r)/(1+exp(x%*%gamma2_r)))))%*%(y - a1_r*(exp(x%*%gamma1_r)/(1+exp(x%*%gamma1_r))) - a2_r*(exp(x%*%gamma2_r)/(1+exp(x%*%gamma2_r))))
+    
+    #calculate FOC and SOC of each parameter
+    der1_a1 <- deriv(q, "a1_r")
+    der2_a1 <- deriv(eval(der1_a1), "al_r")
+
+    
+    der1_a2 <- deriv(q, "a2_r")
+    der2_a2 <- deriv(eval(der1_a2), "a2_r")
+
+    der1_g1 <- deriv(q, "gamma1_r")
+    der2_g1 <- deriv(eval(der1_g1), "gamma1_r")
+    
+    der1_g2 <- deriv(q, "gamma2_r")
+    der2_g2 <- deriv(eval(der1_g2), "gamma2_r")
+    
+    #update points
+    a1_r <- as.numeric(a1_r - eval(der2_a1)^(-1)*eval(der1_a1))
+    a2_r <- as.numeric(a2_r - eval(der2_a2)^(-1)*eval(der1_a2))
+    gamma1_r <- gamma1_r - eval(der2_g1)^(-1)%*%eval(der1_g1)
+    gamma2_r <- gamma2_r - eval(der2_g2)^(-1)%*%eval(der1_g2)
+  }
+  
+  #store estimates
+  a1_hat <- rbind(a1_hat, a1_r)
+  a2_hat <- rbind(a2_hat, a2_r)
+  gamma1_hat <- rbind(gamma1_hat, gamma1_r)
+  gamma2_hat <- rbind(gamma2_hat, gamma2_r)
+}
+
+#3. Local minima is an issue because we do not know if q is convex.
+#There can be multiple local minima, and only one global minimum.
+#Depending on the starting point, we might not converge to the global minimum.
+#To fix this issue, we iterate through an array of starting points, then pick the one that leads to the lowest SSE.
+
+#generate samples
+for (i in 1:S){
+  u <- rnorm(N, 0, 1)
+  x <- mvrnorm(N, mu, sigma, empirical = TRUE)
+  y <- a1*(exp(x%*%gamma1)/(1+exp(x%*%gamma1))) + a2*(exp(x%*%gamma2)/(1+exp(x%*%gamma2))) + u
+  
+  
+#store data
+  dt <- data.table(cbind(x, y))
+  
+#estimate parameters using Newton-Raphson method
+  
+#create matrices to store estimates from each starting point
+a1_sp <- c()
+a2_sp <- c()
+gamma1_sp <- c()
+gamma2_sp <- c()
+
+#we generate random starting points again, but this time we generate 10 starting points
+#we run 100 iterations of Newton-Raphson for each of the 10 starting points
+for (i in 1:10){
+  a1_r <- rnorm(1, a1, 1)
+  a2_r <- rnorm(1, a2, 1)
+  gamma1_r <- mvrnorm(1,gamma1, sigma, empirical = FALSE)
+  gamma2_r <- mvrnorm(1,gamma2, sigma, empirical = FALSE)
+  for (i in 1:100){
+    #define SSE function
+    q <- t((y - a1_r*(exp(x%*%gamma1_r)/(1+exp(x%*%gamma1_r))) - a2_r*(exp(x%*%gamma2_r)/(1+exp(x%*%gamma2_r)))))%*%(y - a1_r*(exp(x%*%gamma1_r)/(1+exp(x%*%gamma1_r))) - a2_r*(exp(x%*%gamma2_r)/(1+exp(x%*%gamma2_r))))
+    
+    #calculate FOC and SOC of each parameter
+    der1_a1 <- deriv(q, "a1_r")
+    der2_a1 <- deriv(eval(der1_a1), "al_r")
+    
+    
+    der1_a2 <- deriv(q, "a2_r")
+    der2_a2 <- deriv(eval(der1_a2), "a2_r")
+    
+    der1_g1 <- deriv(q, "gamma1_r")
+    der2_g1 <- deriv(eval(der1_g1), "gamma1_r")
+    
+    der1_g2 <- deriv(q, "gamma2_r")
+    der2_g2 <- deriv(eval(der1_g2), "gamma2_r")
+    
+    #update points
+    a1_r <- as.numeric(a1_r - eval(der2_a1)^(-1)*eval(der1_a1))
+    a2_r <- as.numeric(a2_r - eval(der2_a2)^(-1)*eval(der1_a2))
+    gamma1_r <- gamma1_r - eval(der2_g1)^(-1)%*%eval(der1_g1)
+    gamma2_r <- gamma2_r - eval(der2_g2)^(-1)%*%eval(der1_g2)
+  }
+#append estimates for starting point
+  a1_sp <- rbind(a1_sp, a1_r)
+  a2_sp <- rbind(a2_sp, a2_r)
+  gamma1_sp <- rbind(gamma1_sp, gamma1_r)
+  gamma2_sp <- rbind(gamma2_sp, gamma2_r)
+}
+
+#calculate SSE for each starting point
+sse <- c()
+
+for(i in 1:10){
+  residual <- t((y - a1_sp[i,]*(exp(x%*%gamma1_sp[i,])/(1+exp(x%*%gamma1_sp[i,]))) - a2_sp[i,]*(exp(x%*%gamma2_sp[i,])/(1+exp(x%*%gamma2_sp[i,])))))%*%(y - a1_sp[i,]*(exp(x%*%gamma1_sp[i,])/(1+exp(x%*%gamma1_sp[i,]))) - a2_sp[i,]*(exp(x%*%gamma1_sp[i,])/(1+exp(x%*%gamma2_sp[i,]))))
+  sse <- rbind(sse, residual)
+  }
+
+
+#4.store estimates of starting point with lowest SSE
+  a1_hat <- rbind(a1_hat, a1_sp[which.min(sse),])
+  a2_hat <- rbind(a2_hat, a2_sp[which.min(sse),])
+  gamma1_hat <- rbind(gamma1_hat, gamma1_sp[which.min(sse),])
+  gamma2_hat <- rbind(gamma2_hat, gamma2_sp[which.min(sse),])
+}
+
+#report mean and standard deviation
+colMeans(a1_hat)
+colMeans(a2_hat)
+colMeans(gamma1_hat)
+colMeans(gamma2_hat)
+# mean(a1_hat) = 1.5
+# mean(a2_hat) = 1.4
+# mean(gamma1_hat) = (1, 0, -1)
+# mean(gamma2_hat) = (1.1, 1.1, 0)
+
+apply(a1_hat, 2, sd)
+apply(a2_hat, 2, sd)
+apply(gamma1_hat, 2, sd)
+apply(gamma2_hat, 2, sd)
+#sd(a1_hat) = 1.07
+#sd(a2_hat) = 1.04
+#sd(gamma1_hat) = (1.06, 1.03, 1.08)
+#sd(gamma2_hat) = (1.04, 1.08, 1.01)
+
+#estimates more or less converges to true value.I suspect the error's are due to two reasons:
+#1) local minima issue - the results are still not converging to global minimum even given 10 starting points
+#2) not enough iterations to converge. 
+
+#5. use built-in function to estimate neural network
+
+#create matrix to store results
+results <- c()
+
+#generate samples
+for (i in 1:S){
+  u <- rnorm(N, 0, 1)
+  x <- mvrnorm(N, mu, sigma, empirical = TRUE)
+  y <- a1*(exp(x%*%gamma1)/(1+exp(x%*%gamma1))) + a2*(exp(x%*%gamma2)/(1+exp(x%*%gamma2))) + u
+  
+  
+#store data
+  dt <- data.table(cbind(x, y))
+
+#rename column names of X
+colnames(x) <- c("V1", "V2", "V3")
+
+#use neuralnet function to estimate parameters
+model <- neuralnet(y ~ V1 + V2 + V3 +0, dt, hidden = 2, linear.output = TRUE)
+
+#append results
+results <- cbind(results, model$result.matrix)
+}
+
+#report mean and standard deviation
+rowMeans(results)
+apply(results, 1, sd)
+
+#means are significantly different from true values. 
+#method used is different - neuralnet function uses back propogation instead of newton-raphson.
+#learning rate might be too low.
+#neuralnet might be choosing incorrect starting point which leads to non-global minimum
+
+
+#Part 2
+
+#create vector to store number of leaves + residuals from predicted values
+n_leaf <- c()
+pred_res <- c()
+
+#1. simulate samples
+for (i in 1:S){
+  u <- rnorm(N, 0, 1)
+  x1 <- rnorm(N, 0, 1)
+  x2 <- rnorm(N, 0, 1)
+  x3 <- rnorm(N, 0, 1)
+  
+  y <- x1 + x2 + x3 + u
+  
+#store data
+dt2 <- data.table(cbind(x1, x2, x3, y))
+
+#2. estimate regression tree using CART
+
+model <- rpart(y ~ x1 + x2 + x3, dt2)
+
+#3. investigate predicted y and number of leafs 
+
+#calculate number of leaves, predicted values, and SSE
+pred_res <- rbind(pred_res, t((y-predict(model)))%*%(y-predict(model)))
+n_leaf <- rbind(n_leaf,sum(model$frame$var == "<leaf>"))
+}
+
+#look at mean SSE and number of leaves
+colMeans(pred_res)
+colMeans(n_leaf)
+#average SSE = 1497.6, average number of leaves = 14.5
+
+
+
+#4. regression tree of y on w = x1 + x2 + x3
+
+#create new vectors to store number of leaves and SSE
+n_leaf2 <- c()
+pred_res2 <- c()
+
+for (i in 1:S){
+  u <- rnorm(N, 0, 1)
+  x1 <- rnorm(N, 0, 1)
+  x2 <- rnorm(N, 0, 1)
+  x3 <- rnorm(N, 0, 1)
+  w <- x1 + x2 + x3
+  
+  y <- w + u
+  
+  #store data
+  dt2 <- data.table(cbind(w, y))
+  
+  #estimate
+  
+  model2 <- rpart(y ~ w, dt2)
+  
+  #calculate number of leaves, predicted values, and SSE
+  pred_res2 <- rbind(pred_res2, t((y-predict(model2)))%*%(y-predict(model2)))
+  n_leaf2 <- rbind(n_leaf2,sum(model2$frame$var == "<leaf>"))
+  
+}
+
+#look at mean SSE and number of leaves
+colMeans(pred_res2)
+colMeans(n_leaf2)
+#SSE = 1033.99, number of leaves = 7.2
+
+#we see lower variances and less leaves compared to previous method
+
+
+#5. regression tree with hidden layer K=3
+
+#here we have y <- sigmoid(g1'x) + sigmoid(g2'x) + sigmoid(g3'x)
+#or y<- sigmoid(g*w)
+
+#assume g1, g2, g3, g all follow standard normal distribution
+
+n_leaf3 <- c()
+pred_res3 <- c()
+
+for (i in 1:S){
+  u <- rnorm(N, 0, 1)
+  x <- mvrnorm(N, mu, sigma, empirical = TRUE)
+  g1 <- mvrnorm(1, mu, sigma, empirical = FALSE)
+  g2 <- mvrnorm(1, mu, sigma, empirical = FALSE)
+  g3 <- mvrnorm(1, mu, sigma, empirical = FALSE)
+  
+  g1_o <- (exp(x%*%g1)/(1+exp(x%*%g1)))
+  g2_o <- (exp(x%*%g2)/(1+exp(x%*%g2)))
+  g3_o <- (exp(x%*%g3)/(1+exp(x%*%g3)))
+  
+  y <- g1_o + g2_o + g3_o + u
+  
+  #store data
+  dt2 <- data.table(cbind(g1_o,g2_o,g3_o, y))
+  
+  #estimate
+  
+  model3 <- rpart(y ~ g1_o + g2_o + g3_o, dt2)
+  
+  pred_res3 <- rbind(pred_res3, t((y-predict(model3)))%*%(y-predict(model3)))
+  n_leaf3 <- rbind(n_leaf3,sum(model3$frame$var == "<leaf>"))
+  
+}
+#look at mean SSE and number of leaves
+colMeans(pred_res3)
+colMeans(n_leaf3)
+#SSE = 992.6, number of leaves = 5.1
+
+
+# now we make regression tree of y on  w = x1 + x2 + x3 with hidden layer K=3
+
+n_leaf4 <- c()
+pred_res4 <- c()
+
+for (i in 1:S){
+  u <- rnorm(N, 0, 1)
+  x <- mvrnorm(N, mu, sigma, empirical = TRUE)
+  g1 <- mvrnorm(1, mu, sigma, empirical = FALSE)
+  g2 <- mvrnorm(1, mu, sigma, empirical = FALSE)
+  g3 <- mvrnorm(1, mu, sigma, empirical = FALSE)
+  
+  g1_o <- (exp(x%*%g1)/(1+exp(x%*%g1)))
+  g2_o <- (exp(x%*%g2)/(1+exp(x%*%g2)))
+  g3_o <- (exp(x%*%g3)/(1+exp(x%*%g3)))
+  
+  w <- g1_o + g2_o + g3_o 
+  
+  y <- w + u
+  
+  #store data
+  dt2 <- data.table(cbind(w, y))
+  
+  #estimate
+  
+  model4 <- rpart(y ~ w, dt2)
+  
+  pred_res4 <- rbind(pred_res4, t((y-predict(model4)))%*%(y-predict(model4)))
+  n_leaf4 <- rbind(n_leaf4,sum(model4$frame$var == "<leaf>"))
+  
+}
+
+#look at mean SSE and number of leaves
+colMeans(pred_res4)
+colMeans(n_leaf4)
+#SSE = 989.25, number of leaves = 3.76
+
+#discuss similarities and differences between strategies:
+#1) using w = x1 + x2 + x3 generates smaller variance, and smaller number of leaves
+#2) adding hidden layer reduces variance and number of leaves
+#3) using w reduces SSE less when there is hidden layer, because the hidden layer is already using linear combinations of X.
+#4) we see smaller variance when using w because we assume the correct true functional form of y
